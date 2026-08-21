@@ -73,8 +73,8 @@ const SECTIONS = [
     title: 'slskd (Soulseek)',
     description: 'Connect to your slskd download client for Soulseek downloads.',
     fields: [
-      { key: 'slskd_url',     label: 'slskd URL',   placeholder: 'http://gluetun:5030', secret: false },
-      { key: 'slskd_api_key', label: 'API Key',      placeholder: 'your-slskd-api-key',  secret: true  },
+      { key: 'slskd_url',     label: 'slskd URL', placeholder: 'http://host.docker.internal:5030', secret: false },
+      { key: 'slskd_api_key', label: 'API Key',   placeholder: 'your-slskd-api-key',               secret: true  },
     ],
     testKey: 'slskd',
     testLabel: 'Test slskd',
@@ -83,17 +83,27 @@ const SECTIONS = [
     title: 'Jellyfin',
     description: 'Connect to Jellyfin for library scanning and playlist creation.',
     fields: [
-      { key: 'jellyfin_url',     label: 'Jellyfin URL', placeholder: 'http://jellyfin:8096',   secret: false },
-      { key: 'jellyfin_api_key', label: 'API Key',      placeholder: 'your-jellyfin-api-key', secret: true  },
+      { key: 'jellyfin_url',     label: 'Jellyfin URL', placeholder: 'http://jellyfin:8096',    secret: false },
+      { key: 'jellyfin_api_key', label: 'API Key',      placeholder: 'your-jellyfin-api-key',  secret: true  },
     ],
     testKey: 'jellyfin',
     testLabel: 'Test Jellyfin',
   },
   {
-    title: 'Last.fm',
-    description: 'Connect to Last.fm for music recommendations and discovery.',
+    title: 'ListenBrainz',
+    description: 'Connect to ListenBrainz for music recommendations based on your listening history. Get your token at listenbrainz.org/settings/',
     fields: [
-      { key: 'lastfm_api_key',  label: 'API Key',  placeholder: 'your-lastfm-api-key', secret: true  },
+      { key: 'listenbrainz_username', label: 'Username', placeholder: 'your-listenbrainz-username', secret: false },
+      { key: 'listenbrainz_token',    label: 'API Token', placeholder: 'your-listenbrainz-token',   secret: true  },
+    ],
+    testKey: 'listenbrainz',
+    testLabel: 'Test ListenBrainz',
+  },
+  {
+    title: 'Last.fm',
+    description: 'Connect to Last.fm as a fallback for music recommendations.',
+    fields: [
+      { key: 'lastfm_api_key',  label: 'API Key',  placeholder: 'your-lastfm-api-key',  secret: true  },
       { key: 'lastfm_username', label: 'Username', placeholder: 'your-lastfm-username', secret: false },
     ],
     testKey: 'lastfm',
@@ -127,7 +137,6 @@ export default function SettingsPage() {
   const save = async () => {
     setLoading(true)
     try {
-      // Only send non-empty, non-masked values
       const toSave: Record<string, string> = {}
       for (const [k, v] of Object.entries(values)) {
         if (v && v !== '***configured***') {
@@ -136,7 +145,6 @@ export default function SettingsPage() {
       }
       await api.settings.update(toSave)
       setSaved(true)
-      // Refresh to get masked values
       const fresh = await api.settings.get()
       setValues(fresh)
     } catch (e: any) {
@@ -149,10 +157,11 @@ export default function SettingsPage() {
   const getTestFn = (testKey: string) => async (): Promise<TestResult> => {
     try {
       const fns: Record<string, () => Promise<any>> = {
-        slskd:    api.settings.testSlskd,
-        jellyfin: api.settings.testJellyfin,
-        lastfm:   api.settings.testLastfm,
-        fluxer:   api.settings.testFluxer,
+        slskd:          api.settings.testSlskd,
+        jellyfin:       api.settings.testJellyfin,
+        lastfm:         api.settings.testLastfm,
+        listenbrainz:   api.settings.testListenbrainz,
+        fluxer:         api.settings.testFluxer,
       }
       const result = await fns[testKey]()
       return { ok: true, message: result.message || 'Connected' }

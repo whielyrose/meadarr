@@ -1,12 +1,12 @@
 """
 Settings API for Meadarr.
 All configuration managed through the web UI, stored in SQLite.
-No .env file needed beyond PORT and volume paths.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from database.models import get_setting, set_setting, get_all_settings
 from services import slskd, jellyfin, lastfm, notifier
+from services import listenbrainz
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -21,22 +21,27 @@ class SettingsUpdate(BaseModel):
     # Last.fm
     lastfm_api_key: str | None = None
     lastfm_username: str | None = None
+    # ListenBrainz
+    listenbrainz_token: str | None = None
+    listenbrainz_username: str | None = None
     # Fluxer
     fluxer_webhook_url: str | None = None
     # Download preferences
-    default_format: str | None = None        # 'mp3' or 'flac'
-    upgrade_to_flac: str | None = None       # 'true' or 'false'
+    default_format: str | None = None
+    upgrade_to_flac: str | None = None
     auto_scan_interval_hours: str | None = None
 
 
-SENSITIVE_KEYS = {"slskd_api_key", "jellyfin_api_key", "lastfm_api_key", "fluxer_webhook_url"}
+SENSITIVE_KEYS = {
+    "slskd_api_key", "jellyfin_api_key",
+    "lastfm_api_key", "listenbrainz_token", "fluxer_webhook_url"
+}
 
 
 @router.get("")
 async def get_settings():
     """Get all settings, masking sensitive values."""
     all_settings = get_all_settings()
-    # Mask sensitive values
     for key in SENSITIVE_KEYS:
         if all_settings.get(key):
             all_settings[key] = "***configured***"
@@ -55,7 +60,6 @@ async def update_settings(body: SettingsUpdate):
 
 @router.post("/test/slskd")
 async def test_slskd():
-    """Test slskd connection."""
     ok = await slskd.test_connection()
     if not ok:
         raise HTTPException(400, "Could not connect to slskd. Check URL and API key.")
@@ -64,7 +68,6 @@ async def test_slskd():
 
 @router.post("/test/jellyfin")
 async def test_jellyfin():
-    """Test Jellyfin connection."""
     ok = await jellyfin.test_connection()
     if not ok:
         raise HTTPException(400, "Could not connect to Jellyfin. Check URL and API key.")
@@ -78,16 +81,22 @@ async def test_jellyfin():
 
 @router.post("/test/lastfm")
 async def test_lastfm():
-    """Test Last.fm API key."""
     ok = await lastfm.test_connection()
     if not ok:
         raise HTTPException(400, "Could not connect to Last.fm. Check API key.")
     return {"status": "ok", "message": "Last.fm connection successful"}
 
 
+@router.post("/test/listenbrainz")
+async def test_listenbrainz():
+    ok = await listenbrainz.test_connection()
+    if not ok:
+        raise HTTPException(400, "Could not connect to ListenBrainz. Check username and token.")
+    return {"status": "ok", "message": "ListenBrainz connection successful"}
+
+
 @router.post("/test/fluxer")
 async def test_fluxer():
-    """Test Fluxer webhook by sending a test notification."""
     webhook_url = get_setting("fluxer_webhook_url")
     if not webhook_url:
         raise HTTPException(400, "Fluxer webhook URL not configured")
@@ -97,7 +106,7 @@ async def test_fluxer():
             async with session.post(
                 webhook_url,
                 json={"embeds": [{
-                    "title": "🍯 Meadarr Test",
+                    "title": "Meadarr Test",
                     "description": "Meadarr webhook connection is working!",
                     "color": 0x4ade80,
                 }]},

@@ -20,18 +20,17 @@ const get  = <T>(path: string)                  => req<T>('GET',    path)
 const post = <T>(path: string, body?: unknown)  => req<T>('POST',   path, body)
 const del  = <T>(path: string)                  => req<T>('DELETE', path)
 
-// ── Settings ──────────────────────────────────────────────────────────────────
 export const api = {
   settings: {
-    get:         ()      => get<Record<string, string>>('/settings'),
-    update:      (data: Record<string, string>) => post('/settings', data),
-    testSlskd:   ()      => post('/settings/test/slskd'),
-    testJellyfin:()      => post('/settings/test/jellyfin'),
-    testLastfm:  ()      => post('/settings/test/lastfm'),
-    testFluxer:  ()      => post('/settings/test/fluxer'),
+    get:                ()      => get<Record<string, string>>('/settings'),
+    update:             (data: Record<string, string>) => post('/settings', data),
+    testSlskd:          ()      => post('/settings/test/slskd'),
+    testJellyfin:       ()      => post('/settings/test/jellyfin'),
+    testLastfm:         ()      => post('/settings/test/lastfm'),
+    testListenbrainz:   ()      => post('/settings/test/listenbrainz'),
+    testFluxer:         ()      => post('/settings/test/fluxer'),
   },
 
-  // ── Search ──────────────────────────────────────────────────────────────────
   search: {
     releases: (q: string, limit = 20) =>
       get<{ results: Release[] }>(`/search/releases?q=${encodeURIComponent(q)}&limit=${limit}`),
@@ -49,7 +48,6 @@ export const api = {
     },
   },
 
-  // ── Requests ────────────────────────────────────────────────────────────────
   requests: {
     album: (data: AlbumRequest)   => post<RequestResult>('/requests/album', data),
     track: (data: TrackRequest)   => post<RequestResult>('/requests/track', data),
@@ -61,14 +59,13 @@ export const api = {
     retry: (id: number)           => post(`/requests/${id}/retry`),
   },
 
-  // ── Discovery ───────────────────────────────────────────────────────────────
   discover: {
     recommendedArtists: (limit = 20) =>
-      get<{ artists: ArtistRec[] }>(`/discover/recommended-artists?limit=${limit}`),
+      get<{ artists: ArtistRec[]; source: string }>(`/discover/recommended-artists?limit=${limit}`),
     topArtists: (period = 'overall', limit = 20) =>
-      get<{ artists: ArtistRec[] }>(`/discover/top-artists?period=${period}&limit=${limit}`),
+      get<{ artists: ArtistRec[]; source: string }>(`/discover/top-artists?period=${period}&limit=${limit}`),
     topAlbums: (period = 'overall', limit = 20) =>
-      get<{ albums: AlbumRec[] }>(`/discover/top-albums?period=${period}&limit=${limit}`),
+      get<{ albums: AlbumRec[]; source: string }>(`/discover/top-albums?period=${period}&limit=${limit}`),
     similarArtists: (artist: string) =>
       get<{ similar: ArtistRec[] }>(`/discover/similar-artists/${encodeURIComponent(artist)}`),
     artistTopAlbums: (artist: string) =>
@@ -79,7 +76,6 @@ export const api = {
       get<{ releases: Release[] }>(`/discover/new-releases?limit=${limit}`),
   },
 
-  // ── Playlists ───────────────────────────────────────────────────────────────
   playlists: {
     list:   ()                         => get<{ playlists: Playlist[] }>('/playlists'),
     create: (name: string, description?: string) =>
@@ -91,7 +87,6 @@ export const api = {
     syncToJellyfin: (id: number)       => post(`/playlists/${id}/sync-to-jellyfin`),
   },
 
-  // ── Library ─────────────────────────────────────────────────────────────────
   library: {
     stats:   ()                        => get<LibraryStats>('/library/stats'),
     tracks:  (params?: TrackQueryParams) => {
@@ -114,7 +109,6 @@ export const api = {
   },
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 export interface Release {
   mbid: string
   title: string
@@ -149,7 +143,9 @@ export interface Track {
 export interface ArtistRec {
   name: string
   match?: number
+  similarity?: number
   playcount?: number
+  listen_count?: number
   rank?: number
   url?: string
   image?: string
@@ -161,6 +157,7 @@ export interface AlbumRec {
   name: string
   artist: string
   playcount?: number
+  listen_count?: number
   rank?: number
   url?: string
   image?: string
