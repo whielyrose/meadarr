@@ -157,12 +157,30 @@ async def _poll_until_complete(peer: str, filename: str,
 def _find_downloaded_file(filename: str) -> Path | None:
     """
     Find a downloaded file in the slskd downloads directory.
-    slskd preserves the remote folder structure so we need to search recursively.
+    Handles Windows backslash paths from Soulseek peers.
     """
-    fname = Path(filename).name
+    # Normalise path separators — peers are often Windows
+    normalized = filename
+    # Replace double backslash then single backslash
+    normalized = normalized.replace('\\\\', '/')
+    normalized = normalized.replace('\\', '/')
+    fname = normalized.split('/')[-1]
+    if not fname:
+        return None
+
+    # Search recursively, prefer clean files over slskd duplicate suffixes
+    # e.g. "Track_639229503459564464.mp3" are duplicates slskd creates
+    clean_match = None
+    any_match = None
     for path in SLSKD_DOWNLOADS.rglob(fname):
-        return path
-    return None
+        if any_match is None:
+            any_match = path
+        parts = path.stem.rsplit('_', 1)
+        is_duplicate = (len(parts) == 2 and parts[1].isdigit() and len(parts[1]) > 10)
+        if not is_duplicate and clean_match is None:
+            clean_match = path
+
+    return clean_match or any_match
 
 
 async def process_request(request_id: int):

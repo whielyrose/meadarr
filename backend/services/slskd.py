@@ -256,14 +256,20 @@ async def search_album(artist: str, album: str, year: str = None,
     queries = [q for q in queries if q]
 
     all_results = []
+    seen_files = set()  # deduplicate by (username, filename)
     for query in queries:
         log.info("slskd searching: %s", query)
         results = await search(query, timeout_ms=8000)
         if results:
-            # Flatten responses
+            # Flatten responses, deduplicating by peer+filename
             for response in results if isinstance(results, list) else []:
+                username = response.get("username", "")
                 for file in response.get("files", []):
-                    file["username"] = response.get("username", "")
+                    dedup_key = (username, file.get("filename", ""))
+                    if dedup_key in seen_files:
+                        continue
+                    seen_files.add(dedup_key)
+                    file["username"] = username
                     all_results.append(file)
 
     if not all_results:
