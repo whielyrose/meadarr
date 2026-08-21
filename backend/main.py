@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from database.models import init_db
 from scheduler.tasks import start_scheduler, stop_scheduler
@@ -21,35 +21,28 @@ logging.basicConfig(
 log = logging.getLogger("meadarr")
 
 PORT = int(os.environ.get("PORT", 8090))
+FRONTEND_DIR = "/app/frontend/dist"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    log.info("🍯 Meadarr starting up...")
+    log.info("Meadarr starting up...")
     init_db()
     start_scheduler()
-
-    # Run initial library scan on startup (non-blocking)
-    from services.library_scanner import run_full_scan
-    import asyncio
-    asyncio.create_task(run_full_scan())
-
-    log.info("🍯 Meadarr ready")
+    log.info("Meadarr ready — use Library > Scan Library to index your music")
     yield
-
     log.info("Meadarr shutting down...")
     stop_scheduler()
 
 
 app = FastAPI(
     title="Meadarr",
-    description="Self-hosted music manager — slskd + Last.fm + MusicBrainz + Jellyfin",
+    description="Self-hosted music manager",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# CORS — allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,7 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── API routes ────────────────────────────────────────────────────────────────
 app.include_router(settings.router)
 app.include_router(search.router)
 app.include_router(requests.router)
@@ -69,28 +61,25 @@ app.include_router(library.router)
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "service": "Meadarr",
-        "version": "1.0.0",
-    }
+    return JSONResponse({"status": "ok", "service": "Meadarr", "version": "1.0.0"})
 
 
-# ── Serve frontend ────────────────────────────────────────────────────────────
-# In production the React build is in /app/frontend/dist
-FRONTEND_DIR = "/app/frontend/dist"
-if os.path.exists(FRONTEND_DIR):
+if os.path.isdir(f"{FRONTEND_DIR}/assets"):
     app.mount("/assets", StaticFiles(directory=f"{FRONTEND_DIR}/assets"), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        """Serve the React SPA — all non-API routes go to index.html."""
-        if full_path.startswith("api/"):
-            return {"error": "Not found"}
-        index = f"{FRONTEND_DIR}/index.html"
-        if os.path.exists(index):
-            return FileResponse(index)
-        return {"error": "Frontend not built"}
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """Serve the React SPA for all non-API routes."""
+    if full_path.startswith("api/") or full_path == "health":
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    index = f"{FRONTEND_DIR}/index.html"
+    if os.path.isfile(index):
+        return FileResponse(index)
+    return JSONResponse(
+        {"error": "Frontend not built"},
+        status_code=503
+    )
 
 
 if __name__ == "__main__":
