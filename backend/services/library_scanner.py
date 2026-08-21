@@ -278,6 +278,13 @@ async def run_full_scan() -> dict:
         finally:
             conn.close()
 
+        # Fill in fallback values for required fields before inserting
+        if not file_data.get('artist'):
+            file_data['artist'] = 'Unknown Artist'
+        if not file_data.get('album'):
+            file_data['album'] = 'Unknown Album'
+        if not file_data.get('title'):
+            file_data['title'] = file_data.get('file_path', 'Unknown').split('/')[-1]
         result = add_track_to_library(file_data)
         if result:
             if existing:
