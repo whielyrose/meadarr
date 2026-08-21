@@ -19,7 +19,7 @@ from services.library_scanner import (
 log = logging.getLogger("meadarr.orchestrator")
 
 # How long to wait between polling slskd for download progress (seconds)
-POLL_INTERVAL = 10
+POLL_INTERVAL = 3
 # Maximum time to wait for a download to complete (seconds)
 MAX_DOWNLOAD_WAIT = 3600  # 1 hour
 
@@ -309,21 +309,20 @@ async def process_request(request_id: int):
         )
         task_ids[dl["filename"]] = task_id
 
-    # ── Step 5: Poll for completion ───────────────────────────────────────────
+    # ── Step 5: Poll for completion (parallel) ───────────────────────────────
     _update_request_status(request_id, "processing")
-    completed_files = []
-    failed_files = []
 
-    for dl in download_ids:
+    # Poll all files in parallel — slskd downloads them simultaneously
+    async def poll_one(dl):
         filename = dl["filename"]
         task_id = task_ids.get(filename)
         peer = dl["peer"]
-
         success = await _poll_until_complete(peer, filename, task_id)
-        if success:
-            completed_files.append(filename)
-        else:
-            failed_files.append(filename)
+        return filename, success
+
+    results = await asyncio.gather(*[poll_one(dl) for dl in download_ids])
+    completed_files = [fname for fname, ok in results if ok]
+    failed_files    = [fname for fname, ok in results if not ok]
 
     if not completed_files:
         _update_request_status(request_id, "failed", error="All downloads failed or timed out")
