@@ -282,12 +282,18 @@ async def search_album(artist: str, album: str, year: str = None,
     return best
 
 
-async def download_file(peer: str, filename: str) -> dict | None:
-    """Queue a file for download from a specific peer."""
-    result = await _slskd_request("POST", "/api/v0/transfers/downloads", json_data={
-        "username": peer,
-        "files": [{"filename": filename}]
-    })
+async def download_file(peer: str, filename: str, size: int = None) -> dict | None:
+    """Queue a file for download from a specific peer.
+    slskd 0.22+ requires username in URL path, files as a list in body.
+    """
+    file_entry = {"filename": filename}
+    if size:
+        file_entry["size"] = size
+    result = await _slskd_request(
+        "POST",
+        f"/api/v0/transfers/downloads/{peer}",
+        json_data=[file_entry]
+    )
     return result
 
 
@@ -301,7 +307,8 @@ async def download_album_group(group: dict) -> list[dict]:
         filename = file.get("filename")
         if not filename:
             continue
-        result = await download_file(peer, filename)
+        size = file.get('size') or file.get('fileSize')
+        result = await download_file(peer, filename, size=size)
         if result:
             download_ids.append({
                 "filename": filename,
