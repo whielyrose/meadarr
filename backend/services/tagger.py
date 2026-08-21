@@ -246,18 +246,16 @@ def process_downloaded_file(
     # Create destination directory
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Move file (atomic rename if same filesystem, copy+delete if not)
+    # Copy file to destination (don't delete source — slskd may own it)
     try:
         if dest_path.exists():
             log.warning("Destination already exists, overwriting: %s", dest_path)
             dest_path.unlink()
-        source_path.rename(dest_path)
-        log.info("Moved %s -> %s", source_path.name, dest_path)
-    except OSError:
-        # Cross-filesystem move
         shutil.copy2(str(source_path), str(dest_path))
-        source_path.unlink()
-        log.info("Copied+deleted %s -> %s", source_path.name, dest_path)
+        log.info("Copied %s -> %s", source_path.name, dest_path)
+    except Exception as e:
+        log.error("Failed to copy %s: %s", source_path, e)
+        return None
 
     return dest_path
 
