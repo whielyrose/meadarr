@@ -285,9 +285,9 @@ async def _import_listenbrainz_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
-                    asyncio.create_task(process_request(req_id))
+            # Process all requests in parallel
             if req_ids:
-                await _wait_for_requests(req_ids, timeout=300)
+                await asyncio.gather(*[process_request(rid) for rid in req_ids])
 
         # Scan Jellyfin and create playlist
         await jellyfin.scan_library()
@@ -381,9 +381,8 @@ async def import_spotify_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
-                    asyncio.create_task(process_request(req_id))
             if req_ids:
-                await _wait_for_requests(req_ids, timeout=600)
+                await asyncio.gather(*[process_request(rid) for rid in req_ids])
 
         await jellyfin.scan_library()
         await asyncio.sleep(15)
