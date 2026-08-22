@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Download, RefreshCw, XCircle, RotateCcw, CheckCircle, Clock, AlertCircle } from 'lucide-react'
+import { Download, RefreshCw, XCircle, RotateCcw, CheckCircle, Clock, AlertCircle, Trash2 } from 'lucide-react'
 import { api, DownloadRequest } from '../api'
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -13,7 +13,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
   cancelled:   { label: 'Cancelled',   color: 'badge-gray',   icon: XCircle },
 }
 
-const FILTERS = ['all', 'pending', 'downloading', 'processing', 'completed', 'failed']
+const FILTERS = ['all', 'pending', 'downloading', 'processing', 'completed', 'failed', 'cancelled']
 
 function formatTime(ts: number) {
   return new Date(ts * 1000).toLocaleString()
@@ -48,7 +48,6 @@ export default function QueuePage() {
 
   useEffect(() => {
     fetchRequests()
-    // Auto-refresh every 5s if there are active downloads
     const timer = setInterval(fetchRequests, 5000)
     return () => clearInterval(timer)
   }, [fetchRequests])
@@ -57,6 +56,15 @@ export default function QueuePage() {
     try {
       await api.requests.cancel(id)
       fetchRequests()
+    } catch (e: any) {
+      alert(e.message)
+    }
+  }
+
+  const deleteReq = async (id: number) => {
+    try {
+      await fetch(`/api/requests/${id}/delete`, { method: 'DELETE' })
+      setRequests(prev => prev.filter(r => r.id !== id))
     } catch (e: any) {
       alert(e.message)
     }
@@ -71,27 +79,50 @@ export default function QueuePage() {
     }
   }
 
+  const clearCompleted = async () => {
+    const completed = requests.filter(r =>
+      ['completed', 'failed', 'cancelled', 'duplicate'].includes(r.status)
+    )
+    await Promise.all(completed.map(r => fetch(`/api/requests/${r.id}/delete`, { method: 'DELETE' })))
+    fetchRequests()
+  }
+
   const toggleExpand = async (id: number) => {
-    if (expanded === id) {
-      setExpanded(null)
-      return
-    }
+    if (expanded === id) { setExpanded(null); return }
     setExpanded(id)
-    // Fetch task details
     try {
       const data = await api.requests.get(id)
       setRequests(prev => prev.map(r => r.id === id ? { ...r, tasks: data.tasks } : r))
     } catch (e) {}
   }
 
+  const isActive = (status: string) =>
+    ['pending', 'searching', 'downloading', 'processing'].includes(status)
+
+  const hasFinished = requests.some(r =>
+    ['completed', 'failed', 'cancelled', 'duplicate'].includes(r.status)
+  )
+
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-100">Download Queue</h1>
-        <button className="btn-ghost flex items-center gap-1" onClick={fetchRequests}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {hasFinished && (
+            <button
+              className="btn-secondary flex items-center gap-1 text-xs"
+              onClick={clearCompleted}
+              title="Remove all completed, failed and cancelled requests"
+            >
+              <Trash2 size={13} />
+              Clear Finished
+            </button>
+          )}
+          <button className="btn-ghost flex items-center gap-1" onClick={fetchRequests}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filter tabs */}
@@ -122,7 +153,8 @@ export default function QueuePage() {
           {requests.map(req => {
             const status = STATUS_CONFIG[req.status] || STATUS_CONFIG.pending
             const StatusIcon = status.icon
-            const isActive = ['pending', 'searching', 'downloading', 'processing'].includes(req.status)
+            const active = isActive(req.status)
+            const canCancel = !['completed', 'cancelled'].includes(req.status)
 
             return (
               <div key={req.id} className="card">
@@ -136,7 +168,7 @@ export default function QueuePage() {
                     className={
                       req.status === 'completed' ? 'text-green-500' :
                       req.status === 'failed'    ? 'text-red-500' :
-                      isActive                   ? 'text-honey-400 animate-pulse' :
+                      active                     ? 'text-honey-400 animate-pulse' :
                       'text-gray-600'
                     }
                   />
@@ -164,7 +196,7 @@ export default function QueuePage() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                     {req.status === 'failed' && (
                       <button
                         className="btn-ghost flex items-center gap-1 text-xs"
@@ -173,14 +205,22 @@ export default function QueuePage() {
                         <RotateCcw size={12} /> Retry
                       </button>
                     )}
-                    {isActive && (
+                    {canCancel && (
                       <button
-                        className="btn-ghost flex items-center gap-1 text-xs text-red-400"
+                        className="btn-ghost flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300"
                         onClick={() => cancel(req.id)}
+                        title="Cancel this request"
                       >
                         <XCircle size={12} /> Cancel
                       </button>
                     )}
+                    <button
+                      className="btn-ghost flex items-center gap-1 text-xs text-red-400 hover:text-red-300"
+                      onClick={() => deleteReq(req.id)}
+                      title="Remove from queue"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 </div>
 
@@ -190,12 +230,14 @@ export default function QueuePage() {
                     {req.tasks.map(task => (
                       <div key={task.id} className="flex items-center gap-3 text-xs text-gray-400">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${
-                          task.status === 'completed'  ? 'bg-green-500' :
-                          task.status === 'downloading'? 'bg-honey-400' :
-                          task.status === 'failed'     ? 'bg-red-500' :
+                          task.status === 'completed'   ? 'bg-green-500' :
+                          task.status === 'downloading' ? 'bg-honey-400' :
+                          task.status === 'failed'      ? 'bg-red-500' :
                           'bg-gray-600'
                         }`} />
-                        <span className="truncate flex-1">{task.filename.split('\\').pop()?.split('/').pop()}</span>
+                        <span className="truncate flex-1">
+                          {task.filename.split('\\').pop()?.split('/').pop()}
+                        </span>
                         <span className="shrink-0">{formatBytes(task.downloaded_size || 0)}</span>
                         <span className="shrink-0 text-gray-600">{task.peer}</span>
                       </div>
