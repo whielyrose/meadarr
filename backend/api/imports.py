@@ -1,34 +1,86 @@
 """
 Playlist import API for Meadarr.
 Handles importing playlists from:
-- ListenBrainz Weekly Jams
-- Spotify playlist URLs
+- ListenBrainz Weekly Jams (and other generated playlists)
+- Spotify playlist URLs (no API key required — uses web scraping)
 Both check library first, request missing tracks, then create a Jellyfin playlist.
 """
 import time
 import asyncio
 import logging
+import aiohttp
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from database.models import get_connection, get_setting
-from services import listenbrainz, jellyfin, notifier
+from services import jellyfin, notifier
 from services.spotify import extract_playlist_id, get_playlist_tracks, get_playlist_info
-from services.library_scanner import track_exists, get_album_quality
+from services.library_scanner import track_exists
 from services.orchestrator import process_request
 
 log = logging.getLogger("meadarr.api.imports")
 router = APIRouter(prefix="/api/imports", tags=["imports"])
 
+LB_BASE = "https://api.listenbrainz.org/1"
+
 
 class SpotifyImportRequest(BaseModel):
-    url: str                    # Spotify playlist URL or ID
-    format_pref: str = "mp3"   # download format for missing tracks
-    download_missing: bool = True  # whether to download missing tracks
+    url: str
+    format_pref: str = "mp3"
+    download_missing: bool = True
+
+
+async def _lb_get(path: str, token: str) -> dict | None:
+    """Make an authenticated ListenBrainz API request."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{LB_BASE}{path}",
+                headers={"Authorization": f"Token {token}"},
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                log.warning("ListenBrainz %s returned %s", path, resp.status)
+                return None
+    except Exception as e:
+        log.error("ListenBrainz request error: %s", e)
+        return None
+
+
+def _parse_jspf_tracks(playlist_data: dict) -> list[dict]:
+    """
+    Parse tracks from a ListenBrainz JSPF playlist.
+    JSPF format: playlist.track[].{title, creator, ...}
+    The extension field contains MBIDs.
+    """
+    tracks = []
+    for t in playlist_data.get("track", []):
+        title   = t.get("title", "")
+        creator = t.get("creator", "")
+        album   = t.get("album", "")
+
+        # Extract recording MBID from extension if present
+        mbid = None
+        ext = t.get("extension", {})
+        lb_ext = ext.get("https://musicbrainz.org/doc/jspf#track", {})
+        mbids = lb_ext.get("additional_metadata", {}).get("recording_mbid") or \
+                lb_ext.get("recording_mbid")
+        if mbids:
+            mbid = mbids if isinstance(mbids, str) else mbids[0] if mbids else None
+
+        if title and creator:
+            tracks.append({
+                "title":  title,
+                "artist": creator,
+                "album":  album,
+                "mbid":   mbid,
+            })
+    return tracks
 
 
 async def _request_missing_track(artist: str, title: str, album: str,
-                                   format_pref: str) -> int | None:
-    """Create a download request for a missing track. Returns request ID."""
+                                  format_pref: str) -> int | None:
+    """Create a download request for a missing track."""
     conn = get_connection()
     try:
         cursor = conn.execute(
@@ -48,17 +100,12 @@ async def _request_missing_track(artist: str, title: str, album: str,
 
 
 async def _wait_for_requests(request_ids: list[int], timeout: int = 300) -> dict:
-    """
-    Wait for a list of requests to complete.
-    Returns dict of {request_id: status}.
-    """
+    """Wait for a list of requests to complete."""
     if not request_ids:
         return {}
-
     start = time.time()
     remaining = set(request_ids)
     results = {}
-
     while remaining and (time.time() - start) < timeout:
         await asyncio.sleep(5)
         conn = get_connection()
@@ -72,26 +119,15 @@ async def _wait_for_requests(request_ids: list[int], timeout: int = 300) -> dict
                     remaining.discard(req_id)
         finally:
             conn.close()
-
-    # Mark any still-running as timed out
     for req_id in remaining:
         results[req_id] = "timeout"
-
     return results
 
 
-async def _create_jellyfin_playlist_from_tracks(
-    playlist_name: str,
-    tracks: list[dict],
-) -> str | None:
-    """
-    Create a Jellyfin playlist from a list of tracks.
-    Each track dict should have: artist, title, album.
-    Looks up Jellyfin item IDs for each track.
-    """
+async def _create_jellyfin_playlist(playlist_name: str, tracks: list[dict]) -> str | None:
+    """Create a Jellyfin playlist from a list of tracks."""
     jellyfin_ids = []
     not_found = []
-
     for track in tracks:
         found = await jellyfin.find_track(
             track.get("artist", ""),
@@ -102,172 +138,205 @@ async def _create_jellyfin_playlist_from_tracks(
             jellyfin_ids.append(found["jellyfin_id"])
         else:
             not_found.append(f"{track.get('artist')} - {track.get('title')}")
-
     if not_found:
-        log.info("%d tracks not found in Jellyfin: %s", len(not_found), not_found[:5])
-
+        log.info("%d tracks not found in Jellyfin for '%s'", len(not_found), playlist_name)
     if not jellyfin_ids:
-        log.warning("No tracks found in Jellyfin for playlist %s", playlist_name)
+        log.warning("No tracks found in Jellyfin for playlist '%s'", playlist_name)
         return None
-
-    # Create or update playlist
     playlist_id = await jellyfin.get_or_create_playlist(playlist_name)
     if not playlist_id:
-        log.error("Failed to create Jellyfin playlist: %s", playlist_name)
         return None
-
-    # Clear existing and add new tracks
     await jellyfin.clear_playlist(playlist_id)
     await jellyfin.add_tracks_to_playlist(playlist_id, jellyfin_ids)
-
-    log.info("Created Jellyfin playlist '%s' with %d tracks", playlist_name, len(jellyfin_ids))
+    log.info("Created Jellyfin playlist '%s' with %d/%d tracks",
+             playlist_name, len(jellyfin_ids), len(tracks))
     return playlist_id
 
 
-# ── ListenBrainz Weekly Jams ──────────────────────────────────────────────────
+# ── ListenBrainz Playlist Import ──────────────────────────────────────────────
 
 @router.post("/listenbrainz/weekly-jams")
 async def import_weekly_jams(background_tasks: BackgroundTasks, format_pref: str = "mp3"):
     """
     Import ListenBrainz Weekly Jams playlist.
-    1. Fetches the weekly jams playlist from ListenBrainz
-    2. Checks which tracks are already in library
-    3. Requests missing tracks for download
-    4. Creates a Jellyfin playlist with all tracks (including ones being downloaded)
+    Weekly Jams usually contains songs already in your library — it creates
+    a playlist from your existing music. Missing tracks will be downloaded.
+    Must follow troi-bot on ListenBrainz for playlist generation.
     """
     username = get_setting("listenbrainz_username")
     token    = get_setting("listenbrainz_token")
     if not username or not token:
         raise HTTPException(400, "ListenBrainz username and token must be configured in Settings")
 
-    # Fetch Weekly Jams from ListenBrainz
-    # Weekly Jams are generated by troi-bot and stored as "created for" playlists
-    import aiohttp
-    headers = {"Authorization": f"Token {token}"}
-    weekly_jams = None
+    return await _import_listenbrainz_playlist(
+        username=username,
+        token=token,
+        playlist_type="weekly-jams",
+        format_pref=format_pref,
+        background_tasks=background_tasks,
+    )
 
-    # Try the "created for" endpoint first (troi-bot generated playlists)
-    endpoints_to_try = [
-        f"https://api.listenbrainz.org/1/user/{username}/playlists/createdfor",
-        f"https://api.listenbrainz.org/1/user/listenbrainz/playlists/createdfor/{username}",
-        f"https://api.listenbrainz.org/1/user/{username}/playlists/collaborations",
-        f"https://api.listenbrainz.org/1/user/{username}/playlists",
+
+@router.post("/listenbrainz/weekly-exploration")
+async def import_weekly_exploration(background_tasks: BackgroundTasks, format_pref: str = "mp3"):
+    """Import ListenBrainz Weekly Exploration playlist (new music discovery)."""
+    username = get_setting("listenbrainz_username")
+    token    = get_setting("listenbrainz_token")
+    if not username or not token:
+        raise HTTPException(400, "ListenBrainz username and token must be configured in Settings")
+
+    return await _import_listenbrainz_playlist(
+        username=username,
+        token=token,
+        playlist_type="weekly-exploration",
+        format_pref=format_pref,
+        background_tasks=background_tasks,
+    )
+
+
+async def _import_listenbrainz_playlist(
+    username: str, token: str, playlist_type: str,
+    format_pref: str, background_tasks: BackgroundTasks
+):
+    """
+    Generic ListenBrainz playlist importer.
+    Searches createdfor playlists for the given type.
+    """
+    # Search across multiple endpoints for the playlist
+    search_terms = {
+        "weekly-jams":        ["weekly jams", "weekly-jams"],
+        "weekly-exploration": ["weekly exploration", "weekly-exploration"],
+        "daily-jams":         ["daily jams", "daily-jams"],
+    }
+    terms = search_terms.get(playlist_type, [playlist_type])
+
+    found_playlist = None
+    found_mbid = None
+
+    endpoints = [
+        f"/user/{username}/playlists/createdfor",
+        f"/user/{username}/playlists/collaborations",
+        f"/user/{username}/playlists",
     ]
 
-    for endpoint in endpoints_to_try:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    endpoint,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    if resp.status != 200:
-                        continue
-                    data = await resp.json()
-                    for playlist in data.get("playlists", []):
-                        pl = playlist.get("playlist", {})
-                        title = pl.get("title", "").lower()
-                        if "weekly jams" in title or "weekly-jams" in title:
-                            weekly_jams = pl
-                            log.info("Found Weekly Jams at endpoint: %s", endpoint)
-                            break
-                    if weekly_jams:
-                        break
-        except Exception as e:
-            log.warning("Failed to fetch from %s: %s", endpoint, e)
+    for endpoint in endpoints:
+        data = await _lb_get(endpoint, token)
+        if not data:
             continue
+        for playlist in data.get("playlists", []):
+            pl = playlist.get("playlist", {})
+            title = pl.get("title", "").lower()
+            if any(term in title for term in terms):
+                found_playlist = pl
+                found_mbid = pl.get("identifier", "").split("/")[-1]
+                log.info("Found '%s' playlist at %s", playlist_type, endpoint)
+                break
+        if found_playlist:
+            break
 
-    if not weekly_jams:
+    if not found_playlist:
         raise HTTPException(
             404,
-            "Weekly Jams playlist not found. Make sure you: "
-            "1) Have enough listening history on ListenBrainz, "
-            "2) Follow the user 'troi-bot' on ListenBrainz (required for playlist generation), "
-            "3) Wait until Monday when playlists are generated."
+            f"'{playlist_type}' playlist not found on ListenBrainz. "
+            f"Make sure you: 1) Follow troi-bot at listenbrainz.org/user/troi-bot/, "
+            f"2) Have enough listening history, "
+            f"3) Wait until after Monday when playlists are generated. "
+            f"Check listenbrainz.org/user/{username}/playlists/ to verify the playlist exists."
         )
 
-    # Extract tracks from playlist
-    tracks_raw = weekly_jams.get("track", [])
-    playlist_title = weekly_jams.get("title", "Weekly Jams")
+    # If we only have metadata, fetch the full playlist content by MBID
+    tracks = _parse_jspf_tracks(found_playlist)
 
-    tracks = []
-    for t in tracks_raw:
-        creator = t.get("creator", "")
-        title   = t.get("title", "")
-        if creator and title:
-            tracks.append({
-                "artist": creator,
-                "title":  title,
-                "album":  "",
-                "mbid":   t.get("identifier", [""])[0].split("/")[-1] if t.get("identifier") else None,
-            })
+    if not tracks and found_mbid:
+        # Fetch full playlist content
+        full_data = await _lb_get(f"/playlist/{found_mbid}", token)
+        if full_data:
+            pl_content = full_data.get("playlist", {})
+            tracks = _parse_jspf_tracks(pl_content)
+            if not found_playlist.get("title"):
+                found_playlist["title"] = pl_content.get("title", playlist_type)
 
     if not tracks:
-        raise HTTPException(404, "No tracks found in Weekly Jams playlist")
+        raise HTTPException(
+            404,
+            f"The '{playlist_type}' playlist exists but contains no tracks. "
+            f"This can happen if the playlist was just generated — try again in a few minutes. "
+            f"Check listenbrainz.org/user/{username}/playlists/ to verify it has tracks."
+        )
 
-    log.info("Found %d tracks in Weekly Jams", len(tracks))
+    playlist_name = found_playlist.get("title", playlist_type.replace("-", " ").title())
+    log.info("Found %d tracks in '%s'", len(tracks), playlist_name)
 
-    # Check which are in library, queue missing ones
-    in_library   = []
-    missing      = []
-    request_ids  = []
-
-    for track in tracks:
-        if track_exists(
-            artist=track["artist"],
-            album=track.get("album", ""),
-            title=track["title"],
-            mbid=track.get("mbid"),
-        ):
-            in_library.append(track)
-        else:
-            missing.append(track)
+    # Check library status
+    in_library = [t for t in tracks if track_exists(t["artist"], t.get("album", ""), t["title"], t.get("mbid"))]
+    missing    = [t for t in tracks if not track_exists(t["artist"], t.get("album", ""), t["title"], t.get("mbid"))]
 
     log.info("%d in library, %d missing", len(in_library), len(missing))
 
-    # Queue downloads for missing tracks in background
-    async def _download_and_create_playlist():
+    async def _process():
         req_ids = []
-        for track in missing:
-            req_id = await _request_missing_track(
-                artist=track["artist"],
-                title=track["title"],
-                album=track.get("album", ""),
-                format_pref=format_pref,
-            )
-            if req_id:
-                req_ids.append(req_id)
-                asyncio.create_task(process_request(req_id))
+        # For weekly-jams, usually skip downloads (songs you already have)
+        # For weekly-exploration, download missing songs
+        if missing and playlist_type != "weekly-jams":
+            for track in missing:
+                req_id = await _request_missing_track(
+                    track["artist"], track["title"],
+                    track.get("album", ""), format_pref
+                )
+                if req_id:
+                    req_ids.append(req_id)
+                    asyncio.create_task(process_request(req_id))
+            if req_ids:
+                await _wait_for_requests(req_ids, timeout=300)
 
-        # Wait for downloads (up to 5 minutes)
-        if req_ids:
-            log.info("Waiting for %d downloads to complete...", len(req_ids))
-            await _wait_for_requests(req_ids, timeout=300)
-
-        # Trigger Jellyfin scan
+        # Scan Jellyfin and create playlist
         await jellyfin.scan_library()
-        await asyncio.sleep(15)  # Give Jellyfin time to index
-
-        # Create playlist with all tracks
-        playlist_id = await _create_jellyfin_playlist_from_tracks(playlist_title, tracks)
-
+        await asyncio.sleep(10)
+        playlist_id = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id:
-            await notifier.notify_playlist_created(playlist_title, len(tracks))
-            log.info("Weekly Jams playlist created in Jellyfin: %s", playlist_id)
-        else:
-            log.error("Failed to create Weekly Jams playlist in Jellyfin")
+            await notifier.notify_playlist_created(playlist_name, len(tracks))
 
-    background_tasks.add_task(_download_and_create_playlist)
+    background_tasks.add_task(_process)
 
     return {
         "status": "processing",
-        "playlist_name": playlist_title,
+        "playlist_name": playlist_name,
         "total_tracks": len(tracks),
         "in_library": len(in_library),
         "missing": len(missing),
-        "message": f"Found {len(tracks)} tracks. {len(in_library)} already in library, {len(missing)} will be downloaded. Playlist will be created in Jellyfin when ready."
+        "message": (
+            f"Found {len(tracks)} tracks in '{playlist_name}'. "
+            f"{len(in_library)} already in library. "
+            + (f"{len(missing)} will be downloaded." if missing and playlist_type != "weekly-jams"
+               else f"{len(missing)} missing tracks (Weekly Jams = existing songs, not downloading).")
+            + " Playlist will appear in Jellyfin and Symfonium when ready."
+        )
     }
+
+
+@router.get("/listenbrainz/playlists")
+async def list_listenbrainz_playlists():
+    """List available ListenBrainz generated playlists."""
+    username = get_setting("listenbrainz_username")
+    token    = get_setting("listenbrainz_token")
+    if not username or not token:
+        raise HTTPException(400, "ListenBrainz not configured")
+
+    data = await _lb_get(f"/user/{username}/playlists/createdfor", token)
+    if not data:
+        return {"playlists": []}
+
+    playlists = []
+    for playlist in data.get("playlists", []):
+        pl = playlist.get("playlist", {})
+        playlists.append({
+            "title":   pl.get("title", ""),
+            "mbid":    pl.get("identifier", "").split("/")[-1],
+            "date":    pl.get("date", ""),
+            "creator": pl.get("creator", ""),
+        })
+
+    return {"playlists": playlists}
 
 
 # ── Spotify Playlist Import ───────────────────────────────────────────────────
@@ -278,81 +347,50 @@ async def import_spotify_playlist(
     background_tasks: BackgroundTasks,
 ):
     """
-    Import a Spotify playlist by URL.
-    1. Fetch tracks from Spotify
-    2. Check which are in library
-    3. Optionally download missing ones
-    4. Create Jellyfin playlist
+    Import a Spotify playlist by URL — no API key required.
+    Uses web scraping to read public Spotify playlists.
     """
-    client_id     = get_setting("spotify_client_id")
-    client_secret = get_setting("spotify_client_secret")
-    if not client_id or not client_secret:
-        raise HTTPException(400, "Spotify Client ID and Secret must be configured in Settings")
-
-    # Extract playlist ID
     playlist_id = extract_playlist_id(body.url)
     if not playlist_id:
-        raise HTTPException(400, "Could not extract playlist ID from URL. Use a Spotify playlist URL like: https://open.spotify.com/playlist/...")
+        raise HTTPException(400, "Could not extract playlist ID from URL. Use a full Spotify playlist URL like: https://open.spotify.com/playlist/...")
 
-    # Get playlist info
-    playlist_info = await get_playlist_info(playlist_id)
-    if not playlist_info:
-        raise HTTPException(404, "Could not fetch playlist from Spotify. Make sure it's a public playlist.")
-
-    playlist_name = playlist_info["name"]
-    log.info("Importing Spotify playlist: %s (%d tracks)", playlist_name, playlist_info["track_count"])
-
-    # Fetch all tracks
-    tracks = await get_playlist_tracks(playlist_id)
+    playlist_name, tracks = await get_playlist_tracks(playlist_id)
     if not tracks:
-        raise HTTPException(404, "No tracks found in playlist")
+        raise HTTPException(
+            404,
+            "Could not fetch tracks from this Spotify playlist. "
+            "Make sure it's a public playlist — private playlists cannot be accessed without login."
+        )
+
+    if not playlist_name:
+        playlist_name = f"Spotify Playlist {playlist_id[:8]}"
+
+    log.info("Spotify import: '%s' with %d tracks", playlist_name, len(tracks))
 
     # Check library status
-    in_library  = []
-    missing     = []
-    for track in tracks:
-        if track_exists(
-            artist=track["artist"],
-            album=track.get("album", ""),
-            title=track["title"],
-        ):
-            in_library.append(track)
-        else:
-            missing.append(track)
+    in_library = [t for t in tracks if track_exists(t["artist"], t.get("album", ""), t["title"])]
+    missing    = [t for t in tracks if not track_exists(t["artist"], t.get("album", ""), t["title"])]
 
-    log.info("Spotify playlist '%s': %d in library, %d missing",
-             playlist_name, len(in_library), len(missing))
-
-    async def _process_import():
-        request_ids = []
-
+    async def _process():
+        req_ids = []
         if body.download_missing and missing:
             for track in missing:
                 req_id = await _request_missing_track(
-                    artist=track["artist"],
-                    title=track["title"],
-                    album=track.get("album", ""),
-                    format_pref=body.format_pref,
+                    track["artist"], track["title"],
+                    track.get("album", ""), body.format_pref
                 )
                 if req_id:
-                    request_ids.append(req_id)
+                    req_ids.append(req_id)
                     asyncio.create_task(process_request(req_id))
+            if req_ids:
+                await _wait_for_requests(req_ids, timeout=600)
 
-            if request_ids:
-                log.info("Waiting for %d Spotify track downloads...", len(request_ids))
-                await _wait_for_requests(request_ids, timeout=600)
-
-        # Scan Jellyfin
         await jellyfin.scan_library()
         await asyncio.sleep(15)
 
-        # Create playlist
-        playlist_id_jf = await _create_jellyfin_playlist_from_tracks(playlist_name, tracks)
-
+        playlist_id_jf = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id_jf:
             await notifier.notify_playlist_created(playlist_name, len(tracks))
-            log.info("Spotify playlist '%s' imported to Jellyfin", playlist_name)
-
             # Save to local DB
             conn = get_connection()
             try:
@@ -368,14 +406,14 @@ async def import_spotify_playlist(
                     conn.execute(
                         """INSERT INTO playlists (name, description, jellyfin_id, created_at, updated_at)
                            VALUES (?, ?, ?, ?, ?)""",
-                        (playlist_name, f"Imported from Spotify", playlist_id_jf,
+                        (playlist_name, "Imported from Spotify", playlist_id_jf,
                          int(time.time()), int(time.time()))
                     )
                 conn.commit()
             finally:
                 conn.close()
 
-    background_tasks.add_task(_process_import)
+    background_tasks.add_task(_process)
 
     return {
         "status": "processing",
@@ -384,45 +422,38 @@ async def import_spotify_playlist(
         "in_library": len(in_library),
         "missing": len(missing),
         "download_missing": body.download_missing,
-        "message": f"Importing '{playlist_name}' ({len(tracks)} tracks). {len(in_library)} already in library" +
-                   (f", downloading {len(missing)} missing tracks." if body.download_missing and missing else ".")
+        "message": (
+            f"Importing '{playlist_name}' ({len(tracks)} tracks). "
+            f"{len(in_library)} already in library"
+            + (f", downloading {len(missing)} missing tracks." if body.download_missing and missing else ".")
+        )
     }
 
 
 @router.get("/spotify/playlist/preview")
 async def preview_spotify_playlist(url: str):
-    """
-    Preview a Spotify playlist without importing it.
-    Returns track list with library status.
-    """
-    client_id = get_setting("spotify_client_id")
-    if not client_id:
-        raise HTTPException(400, "Spotify not configured in Settings")
-
+    """Preview a Spotify playlist without importing. No API key needed."""
     playlist_id = extract_playlist_id(url)
     if not playlist_id:
         raise HTTPException(400, "Invalid Spotify playlist URL")
 
-    playlist_info = await get_playlist_info(playlist_id)
-    if not playlist_info:
-        raise HTTPException(404, "Could not fetch playlist")
+    playlist_name, tracks = await get_playlist_tracks(playlist_id)
+    if not tracks:
+        raise HTTPException(404, "Could not fetch playlist — make sure it's public")
 
-    tracks = await get_playlist_tracks(playlist_id, limit=50)
-
-    # Annotate with library status
     annotated = []
     for track in tracks:
-        in_lib = track_exists(
-            artist=track["artist"],
-            album=track.get("album", ""),
-            title=track["title"],
-        )
+        in_lib = track_exists(track["artist"], track.get("album", ""), track["title"])
         annotated.append({**track, "in_library": in_lib})
 
     in_library_count = sum(1 for t in annotated if t["in_library"])
 
     return {
-        "playlist": playlist_info,
+        "playlist": {
+            "id": playlist_id,
+            "name": playlist_name or f"Playlist {playlist_id[:8]}",
+            "track_count": len(tracks),
+        },
         "tracks": annotated,
         "in_library": in_library_count,
         "missing": len(annotated) - in_library_count,

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Music2, RefreshCw, Download, CheckCircle, ExternalLink, Sparkles } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Music2, RefreshCw, Download, CheckCircle, ExternalLink, Sparkles, List } from 'lucide-react'
 
 interface ImportResult {
   status: string
@@ -11,41 +11,69 @@ interface ImportResult {
 }
 
 interface SpotifyPreview {
-  playlist: { name: string; description: string; track_count: number }
+  playlist: { name: string; track_count: number }
   tracks: Array<{ artist: string; title: string; album: string; in_library: boolean }>
   in_library: number
   missing: number
 }
 
+interface LBPlaylist {
+  title: string
+  mbid: string
+  date: string
+  creator: string
+}
+
+type LBPlaylistType = 'weekly-jams' | 'weekly-exploration'
+
 export default function ImportsPage() {
-  // Weekly Jams state
-  const [jamLoading, setJamLoading]   = useState(false)
-  const [jamResult, setJamResult]     = useState<ImportResult | null>(null)
-  const [jamError, setJamError]       = useState<string | null>(null)
+  // ListenBrainz state
+  const [lbPlaylists, setLbPlaylists]   = useState<LBPlaylist[]>([])
+  const [lbLoading, setLbLoading]       = useState(false)
+  const [lbSelected, setLbSelected]     = useState<LBPlaylistType>('weekly-jams')
+  const [lbImporting, setLbImporting]   = useState(false)
+  const [lbResult, setLbResult]         = useState<ImportResult | null>(null)
+  const [lbError, setLbError]           = useState<string | null>(null)
 
   // Spotify state
-  const [spotifyUrl, setSpotifyUrl]   = useState('')
-  const [spotifyFormat, setSpotifyFormat] = useState<'mp3' | 'flac'>('mp3')
+  const [spotifyUrl, setSpotifyUrl]         = useState('')
+  const [spotifyFormat, setSpotifyFormat]   = useState<'mp3' | 'flac'>('mp3')
   const [spotifyDownload, setSpotifyDownload] = useState(true)
   const [spotifyLoading, setSpotifyLoading] = useState(false)
   const [spotifyPreview, setSpotifyPreview] = useState<SpotifyPreview | null>(null)
   const [spotifyResult, setSpotifyResult]   = useState<ImportResult | null>(null)
   const [spotifyError, setSpotifyError]     = useState<string | null>(null)
-  const [previewing, setPreviewing]   = useState(false)
+  const [previewing, setPreviewing]         = useState(false)
 
-  const importWeeklyJams = async () => {
-    setJamLoading(true)
-    setJamResult(null)
-    setJamError(null)
+  // Load available LB playlists
+  useEffect(() => {
+    const load = async () => {
+      setLbLoading(true)
+      try {
+        const res = await fetch('/api/imports/listenbrainz/playlists')
+        if (res.ok) {
+          const data = await res.json()
+          setLbPlaylists(data.playlists || [])
+        }
+      } catch {}
+      finally { setLbLoading(false) }
+    }
+    load()
+  }, [])
+
+  const importLB = async () => {
+    setLbImporting(true)
+    setLbResult(null)
+    setLbError(null)
     try {
-      const res = await fetch('/api/imports/listenbrainz/weekly-jams', { method: 'POST' })
+      const res = await fetch(`/api/imports/listenbrainz/${lbSelected}`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
-      setJamResult(data)
+      setLbResult(data)
     } catch (e: any) {
-      setJamError(e.message)
+      setLbError(e.message)
     } finally {
-      setJamLoading(false)
+      setLbImporting(false)
     }
   }
 
@@ -62,8 +90,7 @@ export default function ImportsPage() {
     } catch (e: any) {
       setSpotifyError(e.message)
     } finally {
-      setPreviewing(false)
-    }
+      setPreviewing(false) }
   }
 
   const importSpotify = async () => {
@@ -75,11 +102,7 @@ export default function ImportsPage() {
       const res = await fetch('/api/imports/spotify/playlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: spotifyUrl,
-          format_pref: spotifyFormat,
-          download_missing: spotifyDownload,
-        }),
+        body: JSON.stringify({ url: spotifyUrl, format_pref: spotifyFormat, download_missing: spotifyDownload }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
@@ -96,71 +119,91 @@ export default function ImportsPage() {
     <div className="p-6 max-w-3xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-gray-100">Import Playlists</h1>
 
-      {/* ── ListenBrainz Weekly Jams ────────────────────────────────────── */}
+      {/* ── ListenBrainz ──────────────────────────────────────────────────── */}
       <div className="card space-y-4">
         <div className="flex items-center gap-2">
           <Sparkles className="text-honey-400" size={18} />
           <div>
-            <h2 className="font-semibold text-gray-200">ListenBrainz Weekly Jams</h2>
+            <h2 className="font-semibold text-gray-200">ListenBrainz Playlists</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Import your personalised Weekly Jams playlist — missing tracks will be downloaded automatically,
-              then a playlist is created in Jellyfin.
+              Import personalised playlists generated by ListenBrainz based on your listening history.
+              Requires following <a href="https://listenbrainz.org/user/troi-bot/" target="_blank" rel="noreferrer"
+                className="text-honey-400 hover:underline">troi-bot</a> on ListenBrainz.
             </p>
           </div>
         </div>
 
-        {jamResult ? (
+        {/* Available playlists from LB */}
+        {lbPlaylists.length > 0 && (
+          <div className="bg-gray-800/50 rounded-lg p-3 space-y-1">
+            <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
+              <List size={12} />Available on your ListenBrainz account:
+            </div>
+            {lbPlaylists.map((pl, i) => (
+              <div key={i} className="text-xs text-gray-300 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                <span>{pl.title}</span>
+                {pl.date && <span className="text-gray-600">{pl.date.slice(0, 10)}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {lbResult ? (
           <div className="bg-green-900/20 border border-green-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center gap-2 text-green-400 font-medium">
-              <CheckCircle size={16} /> {jamResult.playlist_name}
+              <CheckCircle size={16} />{lbResult.playlist_name}
             </div>
-            <p className="text-sm text-gray-300">{jamResult.message}</p>
+            <p className="text-sm text-gray-300">{lbResult.message}</p>
             <div className="flex gap-4 text-xs text-gray-400">
-              <span>Total: {jamResult.total_tracks}</span>
-              <span className="text-green-400">In library: {jamResult.in_library}</span>
-              <span className="text-honey-400">Downloading: {jamResult.missing}</span>
+              <span>Total: {lbResult.total_tracks}</span>
+              <span className="text-green-400">In library: {lbResult.in_library}</span>
+              {lbResult.missing > 0 && <span className="text-honey-400">Missing: {lbResult.missing}</span>}
             </div>
-            <p className="text-xs text-gray-500">
-              The playlist will appear in Jellyfin and Symfonium once all downloads complete.
-              This runs in the background — you can continue using Meadarr normally.
-            </p>
-            <button className="btn-secondary text-xs" onClick={() => setJamResult(null)}>
-              Import Again
-            </button>
+            <button className="btn-secondary text-xs" onClick={() => setLbResult(null)}>Import Again</button>
           </div>
         ) : (
           <>
-            {jamError && (
+            {lbError && (
               <div className="bg-red-900/20 border border-red-800 text-red-300 rounded-lg p-3 text-sm">
-                {jamError}
-                {jamError.includes('configured') && (
-                  <span className="block mt-1 text-xs">
-                    Go to Settings and configure your ListenBrainz username and token.
-                  </span>
-                )}
+                {lbError}
               </div>
             )}
-            <button
-              className="btn-primary flex items-center gap-2"
-              onClick={importWeeklyJams}
-              disabled={jamLoading}
-            >
-              <RefreshCw size={14} className={jamLoading ? 'animate-spin' : ''} />
-              {jamLoading ? 'Fetching Weekly Jams...' : 'Import Weekly Jams'}
-            </button>
+
+            <div className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="label">Playlist Type</label>
+                <select className="input" value={lbSelected}
+                  onChange={e => setLbSelected(e.target.value as LBPlaylistType)}>
+                  <option value="weekly-jams">Weekly Jams (songs you already know)</option>
+                  <option value="weekly-exploration">Weekly Exploration (new discoveries)</option>
+                </select>
+              </div>
+              <button className="btn-primary flex items-center gap-2 shrink-0"
+                onClick={importLB} disabled={lbImporting}>
+                <RefreshCw size={14} className={lbImporting ? 'animate-spin' : ''} />
+                {lbImporting ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+
+            <div className="text-xs text-gray-600 space-y-0.5">
+              <p>• <strong className="text-gray-500">Weekly Jams</strong> — songs from your listening history. Creates a playlist from existing library tracks.</p>
+              <p>• <strong className="text-gray-500">Weekly Exploration</strong> — new music you haven't heard. Missing tracks will be downloaded.</p>
+              <p>• Playlists are generated on Monday mornings. Run on Tuesday for best results.</p>
+            </div>
           </>
         )}
       </div>
 
-      {/* ── Spotify Playlist Import ─────────────────────────────────────── */}
+      {/* ── Spotify ───────────────────────────────────────────────────────── */}
       <div className="card space-y-4">
         <div className="flex items-center gap-2">
           <Music2 className="text-green-400" size={18} />
           <div>
             <h2 className="font-semibold text-gray-200">Spotify Playlist</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              Paste a Spotify playlist URL. Missing tracks will be downloaded via slskd,
-              then a matching playlist is created in Jellyfin for Symfonium.
+              Paste any public Spotify playlist URL. No login or API key required.
+              Missing tracks will be downloaded via slskd, then a playlist is created in Jellyfin.
             </p>
           </div>
         </div>
@@ -168,12 +211,9 @@ export default function ImportsPage() {
         <div className="space-y-3">
           <div>
             <label className="label">Spotify Playlist URL</label>
-            <input
-              className="input"
-              placeholder="https://open.spotify.com/playlist/..."
+            <input className="input" placeholder="https://open.spotify.com/playlist/..."
               value={spotifyUrl}
-              onChange={e => { setSpotifyUrl(e.target.value); setSpotifyPreview(null); setSpotifyResult(null) }}
-            />
+              onChange={e => { setSpotifyUrl(e.target.value); setSpotifyPreview(null); setSpotifyResult(null) }} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -196,19 +236,12 @@ export default function ImportsPage() {
           </div>
 
           <div className="flex gap-2">
-            <button
-              className="btn-secondary flex items-center gap-1"
-              onClick={previewSpotify}
-              disabled={!spotifyUrl.trim() || previewing}
-            >
-              <ExternalLink size={13} />
-              {previewing ? 'Loading...' : 'Preview'}
+            <button className="btn-secondary flex items-center gap-1"
+              onClick={previewSpotify} disabled={!spotifyUrl.trim() || previewing}>
+              <ExternalLink size={13} />{previewing ? 'Loading...' : 'Preview'}
             </button>
-            <button
-              className="btn-primary flex items-center gap-2"
-              onClick={importSpotify}
-              disabled={!spotifyUrl.trim() || spotifyLoading}
-            >
+            <button className="btn-primary flex items-center gap-2"
+              onClick={importSpotify} disabled={!spotifyUrl.trim() || spotifyLoading}>
               <Download size={14} className={spotifyLoading ? 'animate-pulse' : ''} />
               {spotifyLoading ? 'Importing...' : 'Import Playlist'}
             </button>
@@ -218,24 +251,15 @@ export default function ImportsPage() {
         {spotifyError && (
           <div className="bg-red-900/20 border border-red-800 text-red-300 rounded-lg p-3 text-sm">
             {spotifyError}
-            {spotifyError.includes('configured') && (
-              <span className="block mt-1 text-xs">
-                Go to Settings and configure your Spotify Client ID and Secret.
-              </span>
-            )}
           </div>
         )}
 
-        {/* Preview */}
         {spotifyPreview && (
           <div className="space-y-3">
             <div className="bg-gray-800 rounded-lg p-3">
               <div className="font-medium text-gray-200">{spotifyPreview.playlist.name}</div>
-              {spotifyPreview.playlist.description && (
-                <div className="text-xs text-gray-500 mt-0.5">{spotifyPreview.playlist.description}</div>
-              )}
               <div className="flex gap-4 mt-2 text-xs">
-                <span className="text-gray-400">{spotifyPreview.playlist.track_count} tracks total</span>
+                <span className="text-gray-400">{spotifyPreview.playlist.track_count} tracks</span>
                 <span className="text-green-400">{spotifyPreview.in_library} in library</span>
                 <span className="text-honey-400">{spotifyPreview.missing} missing</span>
               </div>
@@ -249,32 +273,17 @@ export default function ImportsPage() {
                   {track.in_library && <span className="ml-auto text-green-500 shrink-0">✓</span>}
                 </div>
               ))}
-              {spotifyPreview.playlist.track_count > spotifyPreview.tracks.length && (
-                <div className="text-xs text-gray-600 text-center py-1">
-                  + {spotifyPreview.playlist.track_count - spotifyPreview.tracks.length} more tracks
-                </div>
-              )}
             </div>
           </div>
         )}
 
-        {/* Result */}
         {spotifyResult && (
           <div className="bg-green-900/20 border border-green-800 rounded-lg p-4 space-y-2">
             <div className="flex items-center gap-2 text-green-400 font-medium">
-              <CheckCircle size={16} /> {spotifyResult.playlist_name}
+              <CheckCircle size={16} />{spotifyResult.playlist_name}
             </div>
             <p className="text-sm text-gray-300">{spotifyResult.message}</p>
-            <div className="flex gap-4 text-xs text-gray-400">
-              <span>Total: {spotifyResult.total_tracks}</span>
-              <span className="text-green-400">In library: {spotifyResult.in_library}</span>
-              {spotifyResult.missing > 0 && (
-                <span className="text-honey-400">Downloading: {spotifyResult.missing}</span>
-              )}
-            </div>
-            <p className="text-xs text-gray-500">
-              Running in background. The playlist will appear in Jellyfin and Symfonium when ready.
-            </p>
+            <p className="text-xs text-gray-500">Playlist will appear in Jellyfin and Symfonium when ready.</p>
           </div>
         )}
       </div>
