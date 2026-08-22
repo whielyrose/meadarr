@@ -134,6 +134,65 @@ def score_result(result: dict, artist: str, album: str, expected_tracks: int = 0
 
     return max(0.0, min(1.0, score))
 
+def score_track_result(result: dict, artist: str, title: str,
+                       preferred_format: str = "mp3") -> float:
+    """
+    Score a single track search result.
+    Uses title + artist matching instead of album matching,
+    since album is often unavailable for track-level requests.
+    """
+    score = 0.0
+    filename = result.get("filename", "").lower()
+    directory = result.get("directory", "").lower()
+    full_path = f"{directory} {filename}".lower()
+    size = result.get("size", 0)
+
+    # ── Format scoring (40%) ──────────────────────────────────────────────────
+    if preferred_format == "mp3":
+        if filename.endswith(".mp3"):
+            score += 0.40
+        elif filename.endswith(".flac"):
+            score += 0.30
+        elif filename.endswith((".m4a", ".aac", ".ogg", ".opus")):
+            score += 0.15
+    elif preferred_format == "flac":
+        if filename.endswith(".flac"):
+            score += 0.40
+        elif filename.endswith(".mp3"):
+            score += 0.25
+        elif filename.endswith((".m4a", ".aac")):
+            score += 0.10
+
+    # ── Title relevance (35%) ─────────────────────────────────────────────────
+    title_lower = title.lower()
+    artist_lower = artist.lower()
+
+    title_in_path = title_lower in full_path
+    artist_in_path = artist_lower in full_path
+
+    if title_in_path and artist_in_path:
+        score += 0.35
+    elif title_in_path:
+        score += 0.25
+    elif artist_in_path:
+        score += 0.10
+
+    # ── Size sanity (15%) ─────────────────────────────────────────────────────
+    if filename.endswith(".mp3") and size > 2_000_000:
+        score += 0.15
+    elif filename.endswith(".flac") and size > 10_000_000:
+        score += 0.15
+    elif size > 1_000_000:
+        score += 0.08
+
+    # ── Junk filter (penalise) ────────────────────────────────────────────────
+    junk_terms = ["sample", "preview", "karaoke", "instrumental", "cover",
+                  "tribute", "remix", "acapella", "acoustic"]
+    if any(term in full_path for term in junk_terms):
+        score -= 0.15
+
+    return max(0.0, min(1.0, score))
+
 
 def score_album_group(results: list[dict], artist: str, album: str,
                       expected_tracks: int, preferred_format: str = "mp3") -> dict | None:

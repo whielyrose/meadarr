@@ -247,22 +247,38 @@ async def process_request(request_id: int):
             preferred_format=format_pref,
         )
     else:
-        # Single track search
-        query = f"{artist} {title}"
-        results = await slskd.search(query, timeout_ms=8000)
-        if results:
-            all_files = []
-            for response in (results if isinstance(results, list) else []):
-                for f in response.get("files", []):
-                    f["username"] = response.get("username", "")
-                    all_files.append(f)
+        # Single track search — try multiple queries for better coverage
+        queries = [f"{artist} {title}"]
+        if album:
+            queries.append(f"{artist} {album} {title}")
+        queries.append(f"{title} {artist}")
 
-            # Score and pick best single track
-            scored = [
-                (slskd.score_result(f, artist, album, preferred_format=format_pref), f)
-                for f in all_files
-            ]
+        all_files = []
+        seen_files = set()
+        for query in queries:
+            log.info("slskd track search: %s", query)
+            results = await slskd.search(query, timeout_ms=15000)  # longer timeout for tracks
+            if results:
+                for response in (results if isinstance(results, list) else []):
+                    username = response.get("username", "")
+                    for f in response.get("files", []):
+                        dedup_key = (username, f.get("filename", ""))
+                        if dedup_key in seen_files:
+                            continue
+                        seen_files.add(dedup_key)
+                        f["username"] = username
+                        all_files.append(f)
+
+        if all_files:
+            # Score using title only (not album — album often empty for track requests)
+            scored = []
+            for f in all_files:
+                score = slskd.score_track_result(f, artist, title, preferred_format=format_pref)
+                scored.append((score, f))
             scored.sort(key=lambda x: x[0], reverse=True)
+
+            log.info("Track search found %d files, best score: %.2f",
+                     len(all_files), scored[0][0] if scored else 0)
 
             if scored and scored[0][0] >= slskd.MINIMUM_SCORE_THRESHOLD:
                 best_file = scored[0][1]
