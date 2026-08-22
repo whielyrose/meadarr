@@ -95,7 +95,11 @@ async def _poll_until_complete(peer: str, filename: str,
     Returns True if completed successfully, False if failed/timed out.
     """
     start = time.time()
-    fname = Path(filename).name
+    # Normalize Windows backslash paths from Soulseek peers
+    normalized = filename.replace('\\\\', '/').replace('\\', '/')
+    fname = normalized.split('/')[-1]
+    if not fname:
+        fname = Path(filename).name  # fallback
 
     while time.time() - start < timeout:
         await asyncio.sleep(POLL_INTERVAL)

@@ -374,11 +374,17 @@ async def download_album_group(group: dict) -> list[dict]:
             continue
         size = file.get('size') or file.get('fileSize')
         result = await download_file(peer, filename, size=size)
-        if result:
+        if result is not None:  # None means request failed, [] or {} means queued
+            # slskd returns a list of transfer objects for batch downloads
+            slskd_id = None
+            if isinstance(result, list) and result:
+                slskd_id = result[0].get("id")
+            elif isinstance(result, dict):
+                slskd_id = result.get("id")
             download_ids.append({
                 "filename": filename,
                 "peer": peer,
-                "slskd_id": result.get("id") if isinstance(result, dict) else None,
+                "slskd_id": slskd_id,
             })
         await asyncio.sleep(0.5)  # small delay between queuing files
 
