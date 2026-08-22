@@ -177,7 +177,7 @@ async def get_request(request_id: int):
 
 @router.delete("/{request_id}")
 async def cancel_request(request_id: int):
-    """Cancel a pending request."""
+    """Cancel or remove a request from the queue."""
     conn = get_connection()
     try:
         request = conn.execute(
@@ -185,14 +185,32 @@ async def cancel_request(request_id: int):
         ).fetchone()
         if not request:
             raise HTTPException(404, "Request not found")
-        if request["status"] not in ("pending", "failed"):
-            raise HTTPException(400, f"Cannot cancel request with status: {request['status']}")
+        if request["status"] == "completed":
+            raise HTTPException(400, "Cannot cancel a completed request — use delete instead")
 
         conn.execute(
             "UPDATE requests SET status = 'cancelled' WHERE id = ?", (request_id,)
         )
         conn.commit()
         return {"status": "cancelled"}
+    finally:
+        conn.close()
+
+
+@router.delete("/{request_id}/delete")
+async def delete_request(request_id: int):
+    """Permanently delete a request and its tasks from the queue."""
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM requests WHERE id = ?", (request_id,)
+        ).fetchone()
+        if not existing:
+            raise HTTPException(404, "Request not found")
+        conn.execute("DELETE FROM download_tasks WHERE request_id = ?", (request_id,))
+        conn.execute("DELETE FROM requests WHERE id = ?", (request_id,))
+        conn.commit()
+        return {"status": "deleted"}
     finally:
         conn.close()
 

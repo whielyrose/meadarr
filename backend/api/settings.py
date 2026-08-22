@@ -7,26 +7,23 @@ from pydantic import BaseModel
 from database.models import get_setting, set_setting, get_all_settings
 from services import slskd, jellyfin, lastfm, notifier
 from services import listenbrainz
+from services.spotify import test_connection as test_spotify
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 class SettingsUpdate(BaseModel):
-    # slskd
     slskd_url: str | None = None
     slskd_api_key: str | None = None
-    # Jellyfin
     jellyfin_url: str | None = None
     jellyfin_api_key: str | None = None
-    # Last.fm
     lastfm_api_key: str | None = None
     lastfm_username: str | None = None
-    # ListenBrainz
     listenbrainz_token: str | None = None
     listenbrainz_username: str | None = None
-    # Fluxer
+    spotify_client_id: str | None = None
+    spotify_client_secret: str | None = None
     fluxer_webhook_url: str | None = None
-    # Download preferences
     default_format: str | None = None
     upgrade_to_flac: str | None = None
     auto_scan_interval_hours: str | None = None
@@ -34,13 +31,13 @@ class SettingsUpdate(BaseModel):
 
 SENSITIVE_KEYS = {
     "slskd_api_key", "jellyfin_api_key",
-    "lastfm_api_key", "listenbrainz_token", "fluxer_webhook_url"
+    "lastfm_api_key", "listenbrainz_token",
+    "spotify_client_secret", "fluxer_webhook_url"
 }
 
 
 @router.get("")
 async def get_settings():
-    """Get all settings, masking sensitive values."""
     all_settings = get_all_settings()
     for key in SENSITIVE_KEYS:
         if all_settings.get(key):
@@ -50,7 +47,6 @@ async def get_settings():
 
 @router.post("")
 async def update_settings(body: SettingsUpdate):
-    """Update one or more settings."""
     updates = body.model_dump(exclude_none=True)
     for key, value in updates.items():
         if value is not None:
@@ -72,11 +68,7 @@ async def test_jellyfin():
     if not ok:
         raise HTTPException(400, "Could not connect to Jellyfin. Check URL and API key.")
     libs = await jellyfin.get_music_libraries()
-    return {
-        "status": "ok",
-        "message": "Jellyfin connection successful",
-        "music_libraries": libs,
-    }
+    return {"status": "ok", "message": "Jellyfin connection successful", "music_libraries": libs}
 
 
 @router.post("/test/lastfm")
@@ -93,6 +85,14 @@ async def test_listenbrainz():
     if not ok:
         raise HTTPException(400, "Could not connect to ListenBrainz. Check username and token.")
     return {"status": "ok", "message": "ListenBrainz connection successful"}
+
+
+@router.post("/test/spotify")
+async def test_spotify_endpoint():
+    ok = await test_spotify()
+    if not ok:
+        raise HTTPException(400, "Could not connect to Spotify. Check Client ID and Secret.")
+    return {"status": "ok", "message": "Spotify connection successful"}
 
 
 @router.post("/test/fluxer")

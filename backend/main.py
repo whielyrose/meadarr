@@ -1,6 +1,5 @@
 """
 Meadarr - Self-hosted music manager
-Connects slskd, Last.fm, MusicBrainz, and Jellyfin into a unified UI.
 """
 import logging
 import os
@@ -12,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from database.models import init_db
 from scheduler.tasks import start_scheduler, stop_scheduler
-from api import settings, search, requests, discover, playlists, library
+from api import settings, search, requests, discover, playlists, library, imports
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,22 +25,16 @@ FRONTEND_DIR = "/app/frontend/dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events."""
     log.info("Meadarr starting up...")
     init_db()
     start_scheduler()
-    log.info("Meadarr ready — use Library > Scan Library to index your music")
+    log.info("Meadarr ready")
     yield
     log.info("Meadarr shutting down...")
     stop_scheduler()
 
 
-app = FastAPI(
-    title="Meadarr",
-    description="Self-hosted music manager",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Meadarr", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +50,7 @@ app.include_router(requests.router)
 app.include_router(discover.router)
 app.include_router(playlists.router)
 app.include_router(library.router)
+app.include_router(imports.router)
 
 
 @app.get("/health")
@@ -70,16 +64,12 @@ if os.path.isdir(f"{FRONTEND_DIR}/assets"):
 
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
-    """Serve the React SPA for all non-API routes."""
     if full_path.startswith("api/") or full_path == "health":
         return JSONResponse({"error": "Not found"}, status_code=404)
     index = f"{FRONTEND_DIR}/index.html"
     if os.path.isfile(index):
         return FileResponse(index)
-    return JSONResponse(
-        {"error": "Frontend not built"},
-        status_code=503
-    )
+    return JSONResponse({"error": "Frontend not built"}, status_code=503)
 
 
 if __name__ == "__main__":

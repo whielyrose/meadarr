@@ -15,10 +15,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
 
 const FILTERS = ['all', 'pending', 'downloading', 'processing', 'completed', 'failed', 'cancelled']
 
-function formatTime(ts: number) {
-  return new Date(ts * 1000).toLocaleString()
-}
-
+function formatTime(ts: number) { return new Date(ts * 1000).toLocaleString() }
 function formatBytes(bytes: number) {
   if (!bytes) return '—'
   if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
@@ -27,23 +24,18 @@ function formatBytes(bytes: number) {
 }
 
 export default function QueuePage() {
-  const [requests, setRequests]   = useState<DownloadRequest[]>([])
-  const [total, setTotal]         = useState(0)
-  const [filter, setFilter]       = useState('all')
-  const [loading, setLoading]     = useState(false)
-  const [expanded, setExpanded]   = useState<number | null>(null)
+  const [requests, setRequests] = useState<DownloadRequest[]>([])
+  const [filter, setFilter]     = useState('all')
+  const [loading, setLoading]   = useState(false)
+  const [expanded, setExpanded] = useState<number | null>(null)
 
   const fetchRequests = useCallback(async () => {
     setLoading(true)
     try {
       const data = await api.requests.list(filter === 'all' ? undefined : filter)
       setRequests(data.requests)
-      setTotal(data.total)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
   }, [filter])
 
   useEffect(() => {
@@ -52,38 +44,29 @@ export default function QueuePage() {
     return () => clearInterval(timer)
   }, [fetchRequests])
 
-  const cancel = async (id: number) => {
-    try {
-      await api.requests.cancel(id)
-      fetchRequests()
-    } catch (e: any) {
-      alert(e.message)
-    }
+  const cancel = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try { await api.requests.cancel(id); fetchRequests() }
+    catch (err: any) { alert(err.message) }
   }
 
-  const deleteReq = async (id: number) => {
+  const deleteReq = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation()
     try {
-      await fetch(`/api/requests/${id}/delete`, { method: 'DELETE' })
+      await api.requests.delete(id)
       setRequests(prev => prev.filter(r => r.id !== id))
-    } catch (e: any) {
-      alert(e.message)
-    }
+    } catch (err: any) { alert(err.message) }
   }
 
-  const retry = async (id: number) => {
-    try {
-      await api.requests.retry(id)
-      fetchRequests()
-    } catch (e: any) {
-      alert(e.message)
-    }
+  const retry = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try { await api.requests.retry(id); fetchRequests() }
+    catch (err: any) { alert(err.message) }
   }
 
-  const clearCompleted = async () => {
-    const completed = requests.filter(r =>
-      ['completed', 'failed', 'cancelled', 'duplicate'].includes(r.status)
-    )
-    await Promise.all(completed.map(r => fetch(`/api/requests/${r.id}/delete`, { method: 'DELETE' })))
+  const clearFinished = async () => {
+    const done = requests.filter(r => ['completed','failed','cancelled','duplicate'].includes(r.status))
+    await Promise.all(done.map(r => api.requests.delete(r.id).catch(() => {})))
     fetchRequests()
   }
 
@@ -93,15 +76,11 @@ export default function QueuePage() {
     try {
       const data = await api.requests.get(id)
       setRequests(prev => prev.map(r => r.id === id ? { ...r, tasks: data.tasks } : r))
-    } catch (e) {}
+    } catch {}
   }
 
-  const isActive = (status: string) =>
-    ['pending', 'searching', 'downloading', 'processing'].includes(status)
-
-  const hasFinished = requests.some(r =>
-    ['completed', 'failed', 'cancelled', 'duplicate'].includes(r.status)
-  )
+  const isActive = (s: string) => ['pending','searching','downloading','processing'].includes(s)
+  const hasFinished = requests.some(r => ['completed','failed','cancelled','duplicate'].includes(r.status))
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
@@ -109,34 +88,22 @@ export default function QueuePage() {
         <h1 className="text-2xl font-bold text-gray-100">Download Queue</h1>
         <div className="flex items-center gap-2">
           {hasFinished && (
-            <button
-              className="btn-secondary flex items-center gap-1 text-xs"
-              onClick={clearCompleted}
-              title="Remove all completed, failed and cancelled requests"
-            >
-              <Trash2 size={13} />
-              Clear Finished
+            <button className="btn-secondary flex items-center gap-1 text-xs" onClick={clearFinished}>
+              <Trash2 size={13} />Clear Finished
             </button>
           )}
           <button className="btn-ghost flex items-center gap-1" onClick={fetchRequests}>
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            Refresh
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />Refresh
           </button>
         </div>
       </div>
 
-      {/* Filter tabs */}
       <div className="flex gap-1 mb-6 overflow-x-auto pb-1">
         {FILTERS.map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
+          <button key={f} onClick={() => setFilter(f)}
             className={`px-3 py-1.5 rounded-lg text-sm whitespace-nowrap transition-colors ${
-              filter === f
-                ? 'bg-honey-500/20 text-honey-400 font-medium'
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
+              filter === f ? 'bg-honey-500/20 text-honey-400 font-medium' : 'text-gray-500 hover:text-gray-300'
+            }`}>
             {f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
@@ -154,26 +121,16 @@ export default function QueuePage() {
             const status = STATUS_CONFIG[req.status] || STATUS_CONFIG.pending
             const StatusIcon = status.icon
             const active = isActive(req.status)
-            const canCancel = !['completed', 'cancelled'].includes(req.status)
+            const canCancel = !['completed','cancelled'].includes(req.status)
 
             return (
               <div key={req.id} className="card">
-                <div
-                  className="flex items-center gap-4 cursor-pointer"
-                  onClick={() => toggleExpand(req.id)}
-                >
-                  {/* Status icon */}
-                  <StatusIcon
-                    size={18}
-                    className={
-                      req.status === 'completed' ? 'text-green-500' :
-                      req.status === 'failed'    ? 'text-red-500' :
-                      active                     ? 'text-honey-400 animate-pulse' :
-                      'text-gray-600'
-                    }
-                  />
-
-                  {/* Info */}
+                <div className="flex items-center gap-4 cursor-pointer" onClick={() => toggleExpand(req.id)}>
+                  <StatusIcon size={18} className={
+                    req.status === 'completed' ? 'text-green-500' :
+                    req.status === 'failed'    ? 'text-red-500' :
+                    active                     ? 'text-honey-400 animate-pulse' : 'text-gray-600'
+                  } />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-gray-100 truncate">
@@ -183,48 +140,34 @@ export default function QueuePage() {
                       <span className="badge badge-gray">{req.format_pref?.toUpperCase()}</span>
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      Requested {formatTime(req.requested_at)}
+                      {formatTime(req.requested_at)}
                       {req.task_count && req.task_count > 0 && (
-                        <span className="ml-2">
-                          {req.completed_tasks}/{req.task_count} files
-                        </span>
+                        <span className="ml-2">{req.completed_tasks}/{req.task_count} files</span>
                       )}
                     </div>
                     {req.error_message && (
                       <div className="text-xs text-red-400 mt-1 truncate">{req.error_message}</div>
                     )}
                   </div>
-
-                  {/* Actions */}
                   <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
                     {req.status === 'failed' && (
-                      <button
-                        className="btn-ghost flex items-center gap-1 text-xs"
-                        onClick={() => retry(req.id)}
-                      >
-                        <RotateCcw size={12} /> Retry
+                      <button className="btn-ghost flex items-center gap-1 text-xs" onClick={e => retry(req.id, e)}>
+                        <RotateCcw size={12} />Retry
                       </button>
                     )}
                     {canCancel && (
-                      <button
-                        className="btn-ghost flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300"
-                        onClick={() => cancel(req.id)}
-                        title="Cancel this request"
-                      >
-                        <XCircle size={12} /> Cancel
+                      <button className="btn-ghost flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300"
+                        onClick={e => cancel(req.id, e)} title="Cancel">
+                        <XCircle size={12} />Cancel
                       </button>
                     )}
-                    <button
-                      className="btn-ghost flex items-center gap-1 text-xs text-red-400 hover:text-red-300"
-                      onClick={() => deleteReq(req.id)}
-                      title="Remove from queue"
-                    >
+                    <button className="btn-ghost flex items-center gap-1 text-xs text-red-400 hover:text-red-300"
+                      onClick={e => deleteReq(req.id, e)} title="Remove from queue">
                       <Trash2 size={12} />
                     </button>
                   </div>
                 </div>
 
-                {/* Expanded task details */}
                 {expanded === req.id && req.tasks && req.tasks.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-gray-800 space-y-1">
                     {req.tasks.map(task => (
@@ -232,8 +175,7 @@ export default function QueuePage() {
                         <span className={`w-2 h-2 rounded-full shrink-0 ${
                           task.status === 'completed'   ? 'bg-green-500' :
                           task.status === 'downloading' ? 'bg-honey-400' :
-                          task.status === 'failed'      ? 'bg-red-500' :
-                          'bg-gray-600'
+                          task.status === 'failed'      ? 'bg-red-500' : 'bg-gray-600'
                         }`} />
                         <span className="truncate flex-1">
                           {task.filename.split('\\').pop()?.split('/').pop()}
