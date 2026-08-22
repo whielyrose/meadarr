@@ -27,6 +27,7 @@ class SpotifyImportRequest(BaseModel):
     url: str
     format_pref: str = "mp3"
     download_missing: bool = True
+    confirmed: bool = False  # must be True to actually start downloads
 
 
 async def _lb_get(path: str, token: str) -> dict | None:
@@ -156,7 +157,16 @@ async def _create_jellyfin_playlist(playlist_name: str, tracks: list[dict]) -> s
 # ── ListenBrainz Playlist Import ──────────────────────────────────────────────
 
 @router.post("/listenbrainz/weekly-jams")
-async def import_weekly_jams(background_tasks: BackgroundTasks, format_pref: str = "mp3"):
+async def import_weekly_jams(
+    background_tasks: BackgroundTasks,
+    format_pref: str = "mp3",
+    confirmed: bool = False,
+):
+    """
+    Import ListenBrainz Weekly Jams.
+    First call without confirmed=True returns a preview.
+    Second call with confirmed=True actually downloads missing tracks.
+    """
     """
     Import ListenBrainz Weekly Jams playlist.
     Weekly Jams usually contains songs already in your library — it creates
@@ -174,11 +184,16 @@ async def import_weekly_jams(background_tasks: BackgroundTasks, format_pref: str
         playlist_type="weekly-jams",
         format_pref=format_pref,
         background_tasks=background_tasks,
+        confirmed=confirmed,
     )
 
 
 @router.post("/listenbrainz/weekly-exploration")
-async def import_weekly_exploration(background_tasks: BackgroundTasks, format_pref: str = "mp3"):
+async def import_weekly_exploration(
+    background_tasks: BackgroundTasks,
+    format_pref: str = "mp3",
+    confirmed: bool = False,
+):
     """Import ListenBrainz Weekly Exploration playlist (new music discovery)."""
     username = get_setting("listenbrainz_username")
     token    = get_setting("listenbrainz_token")
@@ -191,12 +206,14 @@ async def import_weekly_exploration(background_tasks: BackgroundTasks, format_pr
         playlist_type="weekly-exploration",
         format_pref=format_pref,
         background_tasks=background_tasks,
+        confirmed=confirmed,
     )
 
 
 async def _import_listenbrainz_playlist(
     username: str, token: str, playlist_type: str,
-    format_pref: str, background_tasks: BackgroundTasks
+    format_pref: str, background_tasks: BackgroundTasks,
+    confirmed: bool = False,
 ):
     """
     Generic ListenBrainz playlist importer.
@@ -273,6 +290,29 @@ async def _import_listenbrainz_playlist(
 
     log.info("%d in library, %d missing", len(in_library), len(missing))
 
+    # If not confirmed, return preview without downloading
+    if not confirmed:
+        return {
+            "status": "preview",
+            "playlist_name": playlist_name,
+            "total_tracks": len(tracks),
+            "in_library": len(in_library),
+            "missing": len(missing),
+            "tracks": [
+                {
+                    "artist": t["artist"],
+                    "title": t["title"],
+                    "in_library": t in in_library,
+                }
+                for t in tracks
+            ],
+            "message": (
+                f"Found {len(tracks)} tracks in '{playlist_name}'. "
+                f"{len(in_library)} already in library, {len(missing)} missing. "
+                f"Confirm to proceed."
+            )
+        }
+
     async def _process():
         req_ids = []
         # For weekly-jams, usually skip downloads (songs you already have)
@@ -305,10 +345,10 @@ async def _import_listenbrainz_playlist(
         "in_library": len(in_library),
         "missing": len(missing),
         "message": (
-            f"Found {len(tracks)} tracks in '{playlist_name}'. "
+            f"Importing '{playlist_name}' ({len(tracks)} tracks). "
             f"{len(in_library)} already in library. "
-            + (f"{len(missing)} will be downloaded." if missing and playlist_type != "weekly-jams"
-               else f"{len(missing)} missing tracks (Weekly Jams = existing songs, not downloading).")
+            + (f"Downloading {len(missing)} missing tracks." if missing and playlist_type != "weekly-jams"
+               else f"{len(missing)} missing tracks skipped (Weekly Jams uses existing library).")
             + " Playlist will appear in Jellyfin and Symfonium when ready."
         )
     }
@@ -347,8 +387,10 @@ async def import_spotify_playlist(
     background_tasks: BackgroundTasks,
 ):
     """
-    Import a Spotify playlist by URL — no API key required.
-    Uses web scraping to read public Spotify playlists.
+    Import a Spotify playlist by URL.
+    Requires Spotify Client ID and Secret configured in Settings.
+    First call: returns preview (set download_missing=False, confirmed=False).
+    Second call: actually downloads (set confirmed=True).
     """
     playlist_id = extract_playlist_id(body.url)
     if not playlist_id:
@@ -371,6 +413,30 @@ async def import_spotify_playlist(
     in_library = [t for t in tracks if track_exists(t["artist"], t.get("album", ""), t["title"])]
     missing    = [t for t in tracks if not track_exists(t["artist"], t.get("album", ""), t["title"])]
 
+    # Preview mode — return what would happen without downloading
+    if not body.confirmed:
+        return {
+            "status": "preview",
+            "playlist_name": playlist_name,
+            "total_tracks": len(tracks),
+            "in_library": len(in_library),
+            "missing": len(missing),
+            "tracks": [
+                {
+                    "artist": t["artist"],
+                    "title": t["title"],
+                    "album": t.get("album", ""),
+                    "in_library": track_exists(t["artist"], t.get("album", ""), t["title"]),
+                }
+                for t in tracks[:50]  # show up to 50 for preview
+            ],
+            "message": (
+                f"Found '{playlist_name}' with {len(tracks)} tracks. "
+                f"{len(in_library)} already in library, {len(missing)} missing. "
+                f"Confirm to start importing."
+            )
+        }
+
     async def _process():
         req_ids = []
         if body.download_missing and missing:
@@ -390,7 +456,6 @@ async def import_spotify_playlist(
         playlist_id_jf = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id_jf:
             await notifier.notify_playlist_created(playlist_name, len(tracks))
-            # Save to local DB
             conn = get_connection()
             try:
                 existing = conn.execute(

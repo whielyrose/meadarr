@@ -95,11 +95,7 @@ async def _poll_until_complete(peer: str, filename: str,
     Returns True if completed successfully, False if failed/timed out.
     """
     start = time.time()
-    # Normalize Windows backslash paths from Soulseek peers
-    normalized = filename.replace('\\\\', '/').replace('\\', '/')
-    fname = normalized.split('/')[-1]
-    if not fname:
-        fname = Path(filename).name  # fallback
+    fname = Path(filename).name
 
     while time.time() - start < timeout:
         await asyncio.sleep(POLL_INTERVAL)
@@ -128,17 +124,25 @@ async def _poll_until_complete(peer: str, filename: str,
                     break
 
         if not found:
-            # Transfer may have disappeared = completed and removed
-            # Check if file exists on disk
-            possible_path = SLSKD_DOWNLOADS / fname
-            if possible_path.exists():
-                _update_download_task(task_id, "completed", downloaded_size=possible_path.stat().st_size)
-                return True
-            # Also check subdirectories
+            # Transfer not in active list — either completed/removed or not started yet
+            # Search disk recursively for the file
+            disk_path = None
             for path in SLSKD_DOWNLOADS.rglob(fname):
+                # Prefer clean filenames over slskd numbered duplicates
+                parts = path.stem.rsplit("_", 1)
+                is_dup = len(parts) == 2 and parts[1].isdigit() and len(parts[1]) > 10
+                if not is_dup:
+                    disk_path = path
+                    break
+                elif disk_path is None:
+                    disk_path = path
+
+            if disk_path and disk_path.exists():
+                log.info("File found on disk (transfer completed/removed): %s", disk_path.name)
                 _update_download_task(task_id, "completed",
-                                       downloaded_size=path.stat().st_size)
+                                      downloaded_size=disk_path.stat().st_size)
                 return True
+            # Not found yet — keep waiting
             continue
 
         state = found.get("state", "").lower()
