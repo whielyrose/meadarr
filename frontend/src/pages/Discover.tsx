@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api'
 import { PaginatedAlbumGrid, ViewToggle, AlbumTileItem } from '../components/AlbumGrid'
+import { useDataCache } from '../components/DataCache'
 
 type Tab = 'missing' | 'top-albums' | 'recommendations' | 'new-releases'
 type RecSource = 'auto' | 'listenbrainz' | 'lastfm'
