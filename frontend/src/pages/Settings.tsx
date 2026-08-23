@@ -90,11 +90,8 @@ const SECTIONS = [
   },
   {
     title: 'Spotify',
-    description: 'Connect to Spotify to import playlists by URL. Create an app at developer.spotify.com to get credentials.',
-    fields: [
-      { key: 'spotify_client_id',     label: 'Client ID',     placeholder: 'your-spotify-client-id',     secret: false },
-      { key: 'spotify_client_secret', label: 'Client Secret', placeholder: 'your-spotify-client-secret', secret: true  },
-    ],
+    description: 'Import playlists from Spotify — no API key or login required. Uses the Spotify web player internally. Click Test to verify it works.',
+    fields: [],
     testKey: 'spotify', testLabel: 'Test Spotify',
   },
   {

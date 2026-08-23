@@ -21,8 +21,6 @@ class SettingsUpdate(BaseModel):
     lastfm_username: str | None = None
     listenbrainz_token: str | None = None
     listenbrainz_username: str | None = None
-    spotify_client_id: str | None = None
-    spotify_client_secret: str | None = None
     fluxer_webhook_url: str | None = None
     default_format: str | None = None
     upgrade_to_flac: str | None = None
@@ -32,7 +30,7 @@ class SettingsUpdate(BaseModel):
 SENSITIVE_KEYS = {
     "slskd_api_key", "jellyfin_api_key",
     "lastfm_api_key", "listenbrainz_token",
-    "spotify_client_secret", "fluxer_webhook_url"
+    "fluxer_webhook_url"
 }
 
 
