@@ -181,3 +181,111 @@ async def remove_track(track_id: int):
         return {"status": "removed"}
     finally:
         conn.close()
+
+
+@router.get("/art")
+async def get_album_art(artist: str, album: str, mbid: str = None):
+    """
+    Get album art URL for a given artist/album.
+    Uses Last.fm as primary source, falls back to Cover Art Archive.
+    Results are cached to avoid repeated API calls.
+    Returns {url: string | null}
+    """
+    import time
+    import aiohttp
+    from database.models import get_connection, get_setting
+
+    # Check cache first
+    cache_key = f"art_{artist}_{album}".lower().replace(" ", "_")[:80]
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT result_json, cached_at FROM search_cache WHERE cache_key = ?",
+            (f"albumart_{cache_key}",)
+        ).fetchone()
+        if row and (int(time.time()) - row["cached_at"]) < 86400 * 7:  # 7 day cache
+            import json
+            return json.loads(row["result_json"])
+    finally:
+        conn.close()
+
+    art_url = None
+
+    # Try Last.fm first (we have the API key configured)
+    lastfm_key = get_setting("lastfm_api_key")
+    if lastfm_key:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://ws.audioscrobbler.com/2.0/",
+                    params={
+                        "method": "album.getinfo",
+                        "artist": artist,
+                        "album": album,
+                        "api_key": lastfm_key,
+                        "format": "json",
+                        "autocorrect": "1",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        images = data.get("album", {}).get("image", [])
+                        # Last.fm returns sizes: small, medium, large, extralarge, mega
+                        for img in reversed(images):
+                            url = img.get("#text", "")
+                            if url and "2a96cbd8b46e442fc41c2b86b821562f" not in url:
+                                # Skip the default "no image" hash
+                                art_url = url
+                                break
+        except Exception as e:
+            log.debug("Last.fm art fetch failed for %s - %s: %s", artist, album, e)
+
+    # Fall back to Cover Art Archive if we have an MBID
+    if not art_url and mbid:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Fetch JSON listing first to get the actual image URL
+                async with session.get(
+                    f"https://coverartarchive.org/release-group/{mbid}",
+                    headers={
+                        "User-Agent": "Meadarr/1.0 (https://github.com/whielyrose/meadarr)",
+                        "Accept": "application/json",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for img in data.get("images", []):
+                            if img.get("front", False):
+                                thumbs = img.get("thumbnails", {})
+                                art_url = (
+                                    thumbs.get("250") or
+                                    thumbs.get("small") or
+                                    thumbs.get("500") or
+                                    img.get("image")
+                                )
+                                break
+        except Exception as e:
+            log.debug("CAA art fetch failed for %s: %s", mbid, e)
+
+    result = {"url": art_url}
+
+    # Cache the result
+    import json
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO search_cache (cache_key, result_json, ttl_seconds)
+               VALUES (?, ?, ?)
+               ON CONFLICT(cache_key) DO UPDATE SET
+                 result_json = excluded.result_json,
+                 cached_at = strftime('%s','now'),
+                 ttl_seconds = excluded.ttl_seconds""",
+            (f"albumart_{cache_key}", json.dumps(result), 86400 * 7)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return result

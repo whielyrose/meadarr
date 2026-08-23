@@ -1,21 +1,32 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Search, Download, CheckCircle, ArrowUpCircle, Music2 } from 'lucide-react'
 import { api, Release } from '../api'
 
-function AlbumArt({ mbid, title }: { mbid?: string; title: string }) {
-  const [failed, setFailed] = useState(false)
-  const url = mbid && !failed
-    ? `https://coverartarchive.org/release-group/${mbid}/front-250`
-    : null
+// Fetches art URL via backend — avoids CORS issues with CAA redirects
+function useAlbumArt(mbid?: string, artist?: string, album?: string) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!artist || !album) return
+    let cancelled = false
+    const params = new URLSearchParams({ artist, album })
+    if (mbid) params.set('mbid', mbid)
+    fetch(`/api/library/art?${params}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d?.url) setUrl(d.url) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [mbid, artist, album])
+  return url
+}
 
-  return url ? (
-    <img
-      src={url}
-      alt={title}
-      className="w-10 h-10 rounded-lg object-cover bg-surface-700 shrink-0"
-      onError={() => setFailed(true)}
-      loading="lazy"
-    />
+function AlbumArt({ release }: { release: Release }) {
+  const artUrl = useAlbumArt(release.mbid, release.artist, release.title)
+  const [failed, setFailed] = useState(false)
+
+  return artUrl && !failed ? (
+    <img src={artUrl} alt={release.title}
+      className="w-10 h-10 rounded-lg object-cover bg-surface-700 shrink-0 border border-surface-600"
+      onError={() => setFailed(true)} loading="lazy" />
   ) : (
     <div className="w-10 h-10 bg-surface-700 rounded-lg shrink-0 flex items-center justify-center border border-surface-600">
       <Music2 className="text-muted-600" size={16} />
@@ -56,7 +67,7 @@ export default function SearchPage() {
       })
       setFeedback(prev => ({ ...prev, [release.mbid]: `#${result.request_id}` }))
     } catch (e: any) {
-      setFeedback(prev => ({ ...prev, [release.mbid]: '✗ ' + e.message }))
+      setFeedback(prev => ({ ...prev, [release.mbid]: '✗' }))
     } finally { setRequesting(null) }
   }
 
@@ -69,18 +80,12 @@ export default function SearchPage() {
         </div>
       </div>
 
-      {/* Search bar */}
       <div className="flex gap-3 mb-6">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-500" size={15} />
-          <input
-            className="input pl-9"
-            placeholder="Artist, album, or track..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && doSearch()}
-            autoFocus
-          />
+          <input className="input pl-9" placeholder="Artist, album, or track..."
+            value={query} onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && doSearch()} autoFocus />
         </div>
         <select className="input w-28" value={formatPref}
           onChange={e => setFormatPref(e.target.value as 'mp3' | 'flac')}>
@@ -112,10 +117,7 @@ export default function SearchPage() {
               return (
                 <div key={release.mbid}
                   className="flex items-center gap-3 bg-surface-800 rounded-xl border border-surface-700 px-4 py-3 hover:border-surface-600 transition-all">
-                  {/* Album art */}
-                  <AlbumArt mbid={release.mbid} title={release.title} />
-
-                  {/* Info */}
+                  <AlbumArt release={release} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-slate-100 truncate text-sm">{release.title}</span>
@@ -131,8 +133,6 @@ export default function SearchPage() {
                     </div>
                     <p className="text-xs text-muted-400 mt-0.5 truncate">{release.artist}</p>
                   </div>
-
-                  {/* Action */}
                   <div className="shrink-0 flex items-center gap-2">
                     {fb ? (
                       <span className="text-xs text-accent-300 flex items-center gap-1">
