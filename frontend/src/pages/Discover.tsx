@@ -45,8 +45,8 @@ export default function DiscoverPage() {
   const [recSource, setRecSource] = useState<RecSource>('auto')
   const [viewMode, setViewMode]   = useState<'grid' | 'list'>('grid')
 
-  // Persist data per tab. Recommendations key includes source so switching sources fetches fresh.
-  const [tabData, setTabData] = useState<Record<string, TabState>>({})
+  // Persist data per tab via global DataCache (survives route changes)
+  const cache = useDataCache()
   const [loading, setLoading] = useState(false)
   const [availability, setAvailability] = useState<Availability>({
     listenbrainz_available: false, lastfm_available: false,
@@ -64,13 +64,15 @@ export default function DiscoverPage() {
   }
 
   const currentKey = getKey(tab)
-  const currentState = tabData[currentKey] || EMPTY_TAB
+  const cachedEntry = cache.get<TabState>(`discover:${currentKey}`)
+  const currentState = cachedEntry?.data || EMPTY_TAB
 
   const fetchTab = useCallback(async (targetTab: Tab, force = false) => {
     const key = getKey(targetTab)
+    const cacheKey = `discover:${key}`
 
     // Skip if already loaded and not forcing refresh
-    if (!force && tabData[key]?.loaded) return
+    if (!force && cache.get(cacheKey)?.data?.loaded) return
 
     setLoading(true)
     try {
@@ -141,19 +143,13 @@ export default function DiscoverPage() {
           break
       }
 
-      setTabData(prev => ({
-        ...prev,
-        [key]: { items: transformed, source, loaded: true, error: null }
-      }))
+      cache.set(`discover:${key}`, { items: transformed, source, loaded: true, error: null })
     } catch (e: any) {
-      setTabData(prev => ({
-        ...prev,
-        [key]: { items: [], source: '', loaded: true, error: e.message }
-      }))
+      cache.set(`discover:${key}`, { items: [], source: '', loaded: true, error: e.message })
     } finally {
       setLoading(false)
     }
-  }, [tabData, period, recSource])
+  }, [cache, period, recSource])
 
   // Load current tab on mount and when tab/period/recSource changes
   useEffect(() => { fetchTab(tab) }, [tab, period, recSource, fetchTab])
@@ -216,7 +212,7 @@ export default function DiscoverPage() {
             <Icon size={13} />
             <span className="hidden sm:inline">{label}</span>
             {/* Show cached indicator */}
-            {tabData[getKey(id)]?.loaded && tab !== id && (
+            {cache.get(`discover:${getKey(id)}`)?.data?.loaded && tab !== id && (
               <span className="hidden sm:inline w-1.5 h-1.5 rounded-full bg-green-400/60 ml-0.5" />
             )}
           </button>

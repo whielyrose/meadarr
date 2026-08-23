@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, Play, Pause, Music2, Loader2 } from 'lucide-react'
+import { X, Play, Pause, Music2, Loader2, Volume2, VolumeX, Volume1 } from 'lucide-react'
 
 interface PreviewTrack {
   position:    number
@@ -87,6 +87,12 @@ export default function PreviewModal({
   const [loading, setLoading]   = useState(true)
   const [playing, setPlaying]   = useState<number | null>(null)
   const [progress, setProgress] = useState(0)
+  // Volume 0..1. Persisted to localStorage so it carries between opens.
+  const [volume, setVolume]     = useState<number>(() => {
+    if (typeof window === 'undefined') return 0.7
+    const v = localStorage.getItem('meadarr_preview_volume')
+    return v !== null ? parseFloat(v) : 0.7
+  })
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   // Fetch preview data
@@ -114,6 +120,12 @@ export default function PreviewModal({
     }
   }, [])
 
+  // Sync volume changes to current audio and persist
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume
+    try { localStorage.setItem('meadarr_preview_volume', String(volume)) } catch {}
+  }, [volume])
+
   // Handle ESC key
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -137,7 +149,7 @@ export default function PreviewModal({
 
     // Start new audio
     const audio = new Audio(track.preview_url)
-    audio.volume = 0.7
+    audio.volume = volume
 
     audio.addEventListener('timeupdate', () => {
       if (audio.duration) setProgress((audio.currentTime / audio.duration) * 100)
@@ -230,9 +242,48 @@ export default function PreviewModal({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-surface-700 text-center">
-          <p className="text-xs text-muted-600">
+        {/* Footer with volume */}
+        <div className="p-3 border-t border-surface-700 space-y-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setVolume(volume > 0 ? 0 : 0.7)}
+              className="text-muted-400 hover:text-slate-200 transition-colors shrink-0"
+              title={volume > 0 ? 'Mute' : 'Unmute'}
+            >
+              {volume === 0 ? <VolumeX size={16} /> :
+               volume < 0.5 ? <Volume1 size={16} /> :
+               <Volume2 size={16} />}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={e => setVolume(parseFloat(e.target.value))}
+              className="flex-1 h-1 appearance-none cursor-pointer bg-surface-700 rounded-full accent-accent-500
+                         [&::-webkit-slider-thumb]:appearance-none
+                         [&::-webkit-slider-thumb]:w-3
+                         [&::-webkit-slider-thumb]:h-3
+                         [&::-webkit-slider-thumb]:rounded-full
+                         [&::-webkit-slider-thumb]:bg-accent-500
+                         [&::-webkit-slider-thumb]:cursor-pointer
+                         [&::-webkit-slider-thumb]:shadow-lg
+                         [&::-moz-range-thumb]:w-3
+                         [&::-moz-range-thumb]:h-3
+                         [&::-moz-range-thumb]:rounded-full
+                         [&::-moz-range-thumb]:bg-accent-500
+                         [&::-moz-range-thumb]:border-0
+                         [&::-moz-range-thumb]:cursor-pointer"
+              style={{
+                background: `linear-gradient(to right, rgb(109 99 255) 0%, rgb(109 99 255) ${volume * 100}%, rgb(36 40 56) ${volume * 100}%, rgb(36 40 56) 100%)`
+              }}
+            />
+            <span className="text-xs text-muted-500 w-8 text-right tabular-nums shrink-0">
+              {Math.round(volume * 100)}
+            </span>
+          </div>
+          <p className="text-xs text-muted-600 text-center">
             30-second previews · powered by <span className="text-muted-400">Deezer</span>
           </p>
         </div>

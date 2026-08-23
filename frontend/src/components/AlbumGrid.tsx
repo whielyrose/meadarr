@@ -4,23 +4,42 @@ import {
   ArrowUpCircle, Music2, LayoutGrid, List, Play,
 } from 'lucide-react'
 import PreviewModal from './PreviewModal'
+import { useDataCache } from './DataCache'
 
 export const GRID_PAGE_SIZE = 25 // 5 x 5
 
 // Shared album art hook — fetches from backend /api/library/art
+// Uses DataCache so art doesn't reload every time you switch pages.
 export function useAlbumArt(artist?: string, album?: string, mbid?: string) {
-  const [url, setUrl] = useState<string | null>(null)
+  const cache = useDataCache()
+  const key = artist && album ? `art:${artist.toLowerCase()}|${album.toLowerCase()}` : null
+  const cached = key ? cache.get<string | null>(key) : undefined
+  const [url, setUrl] = useState<string | null>(cached?.data ?? null)
+
   useEffect(() => {
-    if (!artist || !album) return
+    if (!artist || !album || !key) return
+    // If we already have it cached, use that (even if null — cache the "no art" result too)
+    if (cached !== undefined) {
+      setUrl(cached.data)
+      return
+    }
     let cancelled = false
     const params = new URLSearchParams({ artist, album })
     if (mbid) params.set('mbid', mbid)
     fetch(`/api/library/art?${params}`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (!cancelled && d?.url) setUrl(d.url) })
-      .catch(() => {})
+      .then(d => {
+        if (cancelled) return
+        const resolvedUrl = d?.url || null
+        setUrl(resolvedUrl)
+        cache.set(key, resolvedUrl)
+      })
+      .catch(() => {
+        if (!cancelled) cache.set(key, null)
+      })
     return () => { cancelled = true }
-  }, [artist, album, mbid])
+  }, [artist, album, mbid, key])
+
   return url
 }
 
