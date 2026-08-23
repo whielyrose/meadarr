@@ -295,9 +295,8 @@ async def search(query: str, timeout_ms: int = 10000) -> dict | None:
         f"/api/v0/searches/{search_id}/responses",
     )
 
-    # Clean up search
-    await _slskd_request("DELETE", f"/api/v0/searches/{search_id}")
-
+    # Note: we intentionally do NOT delete the search here
+    # so it remains visible in the slskd UI for the user to see
     return results_data
 
 

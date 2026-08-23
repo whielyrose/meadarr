@@ -325,13 +325,15 @@ async def _import_listenbrainz_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
-            # Process all requests in parallel
+            # Sequential processing — avoids overwhelming slskd with concurrent searches
             if req_ids:
-                await asyncio.gather(*[process_request(rid) for rid in req_ids])
+                for rid in req_ids:
+                    await process_request(rid)
+                    await asyncio.sleep(2)
 
         # Scan Jellyfin and create playlist
         await jellyfin.scan_library()
-        await asyncio.sleep(10)
+        await asyncio.sleep(15)
         playlist_id = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id:
             await notifier.notify_playlist_created(playlist_name, len(tracks))
@@ -447,8 +449,11 @@ async def import_spotify_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
+            # Sequential processing — avoids overwhelming slskd with concurrent searches
             if req_ids:
-                await asyncio.gather(*[process_request(rid) for rid in req_ids])
+                for rid in req_ids:
+                    await process_request(rid)
+                    await asyncio.sleep(2)
 
         await jellyfin.scan_library()
         await asyncio.sleep(15)
