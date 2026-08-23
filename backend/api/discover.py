@@ -38,7 +38,7 @@ def _has_listenbrainz() -> bool:
 
 
 @router.get("/recommended-artists")
-async def get_recommended_artists(limit: int = Query(20, ge=1, le=50)):
+async def get_recommended_artists(limit: int = Query(20, ge=1, le=100)):
     """
     Get artist recommendations based on listening history.
     Uses ListenBrainz if configured, falls back to Last.fm.
@@ -58,7 +58,7 @@ async def get_recommended_artists(limit: int = Query(20, ge=1, le=50)):
 @router.get("/top-artists")
 async def get_top_artists(
     period: str = Query("overall", regex="^(overall|7day|1month|3month|6month|12month)$"),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(20, ge=1, le=100),
 ):
     """Get user's top artists. Uses ListenBrainz if available, else Last.fm."""
     if _has_listenbrainz():
@@ -77,7 +77,7 @@ async def get_top_artists(
 @router.get("/top-albums")
 async def get_top_albums(
     period: str = Query("overall", regex="^(overall|7day|1month|3month|6month|12month)$"),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(20, ge=1, le=100),
 ):
     """Get user's top albums annotated with library status."""
     if _has_listenbrainz():
@@ -110,7 +110,7 @@ async def get_artist_top_albums(artist: str, limit: int = Query(10, ge=1, le=20)
 
 
 @router.get("/missing-from-library")
-async def get_missing_from_library(limit: int = Query(20, ge=1, le=50)):
+async def get_missing_from_library(limit: int = Query(20, ge=1, le=100)):
     """Get user's top albums that are NOT in the local library."""
     albums = []
 
@@ -140,7 +140,7 @@ async def get_missing_from_library(limit: int = Query(20, ge=1, le=50)):
 
 
 @router.get("/new-releases")
-async def get_new_releases(limit: int = Query(20, ge=1, le=50)):
+async def get_new_releases(limit: int = Query(20, ge=1, le=100)):
     """Get new releases from MusicBrainz for top listened artists."""
     top_artists = []
 

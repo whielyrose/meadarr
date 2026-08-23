@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 @router.get("/releases")
 async def search_releases(
     q: str = Query(..., min_length=2, description="Search query"),
-    limit: int = Query(20, ge=1, le=50),
+    limit: int = Query(20, ge=1, le=100),
 ):
     """
     Search MusicBrainz for albums/releases.

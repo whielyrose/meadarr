@@ -1,5 +1,28 @@
 const BASE = '/api'
 
+function formatError(err: any, status: number): string {
+  // FastAPI returns detail as either a string OR an array of validation errors
+  const detail = err?.detail
+
+  if (typeof detail === 'string') return detail
+
+  if (Array.isArray(detail)) {
+    // Validation errors: [{loc: [...], msg: "...", type: "..."}]
+    return detail
+      .map(e => {
+        const loc = Array.isArray(e.loc) ? e.loc.slice(1).join('.') : ''
+        return loc ? `${loc}: ${e.msg}` : (e.msg || JSON.stringify(e))
+      })
+      .join(', ')
+  }
+
+  if (detail && typeof detail === 'object') {
+    return detail.msg || JSON.stringify(detail)
+  }
+
+  return err?.message || `HTTP ${status}`
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -8,7 +31,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || `HTTP ${res.status}`)
+    throw new Error(formatError(err, res.status))
   }
   return res.json()
 }
