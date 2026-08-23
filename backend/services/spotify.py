@@ -4,7 +4,7 @@ Uses Client Credentials flow — requires Client ID and Secret.
 Works for any public playlist owned by users (not Spotify-owned playlists).
 
 NOTE: As of March 2026, Spotify renamed the playlist tracks endpoint:
-  OLD: GET /v1/playlists/{id}/tracks  (returns 403 for dev mode apps)
+  OLD: GET /v1/playlists/{id}/tracks  (returns 403 for dev mode apps, no longer used)
   NEW: GET /v1/playlists/{id}/items   (current endpoint)
   Field rename: tracks.track -> items.item
 """
@@ -154,8 +154,8 @@ async def get_playlist_tracks(playlist_id: str) -> tuple[str, list[dict]]:
     Get all tracks from a Spotify playlist.
     Returns (playlist_name, list of track dicts).
 
-    Uses the current /items endpoint (renamed from /tracks in March 2026).
-    Falls back to /tracks endpoint for older compatibility.
+    Uses the /items endpoint (renamed from /tracks in March 2026;
+    the old endpoint now returns 403 for dev mode apps).
     """
     # First get playlist name
     info_data, info_status = await _spotify_get(f"/playlists/{playlist_id}")
@@ -168,69 +168,42 @@ async def get_playlist_tracks(playlist_id: str) -> tuple[str, list[dict]]:
     tracks = []
     offset = 0
 
-    # Try the new /items endpoint first (post-March 2026)
-    # Then fall back to /tracks if needed
-    for endpoint_suffix in ["/items", "/tracks"]:
-        tracks = []
-        offset = 0
-        success = True
+    while True:
+        data, status = await _spotify_get(
+            f"/playlists/{playlist_id}/items",
+            params={
+                "limit": 100,
+                "offset": offset,
+                "additional_types": "track",
+            }
+        )
 
-        while True:
-            data, status = await _spotify_get(
-                f"/playlists/{playlist_id}{endpoint_suffix}",
-                params={
-                    "limit": 100,
-                    "offset": offset,
-                    "additional_types": "track",
-                }
-            )
-
-            if status == 403:
-                log.warning("Endpoint %s returned 403, trying fallback...", endpoint_suffix)
-                success = False
-                break
-
-            if not data:
-                success = False
-                break
-
-            # Handle both /items (new) and /tracks (old) response formats
-            items = data.get("items", [])
-            total = data.get("total", 0)
-
-            for item in items:
-                # New /items format: item.track field
-                # Old /tracks format: item.track field (same!)
-                track = item.get("track") or item.get("item")
-                if not track or track.get("type") != "track":
-                    continue  # skip episodes, local files etc
-                artists = track.get("artists", [{}])
-                tracks.append({
-                    "spotify_id": track.get("id"),
-                    "title":      track.get("name", ""),
-                    "artist":     artists[0].get("name", "") if artists else "",
-                    "album":      track.get("album", {}).get("name", ""),
-                })
-
-            # Pagination
-            if not data.get("next") or offset + 100 >= total:
-                break
-            offset += 100
-
-        if success and tracks:
-            log.info("Fetched %d tracks from Spotify playlist '%s' via %s",
-                     len(tracks), playlist_name, endpoint_suffix)
-            return playlist_name, tracks
-
-        if success and not tracks:
-            # Got a response but empty — genuinely empty playlist
-            log.info("Playlist '%s' is empty", playlist_name)
+        if not data:
+            log.error("Could not fetch tracks from Spotify playlist %s", playlist_id)
             return playlist_name, []
 
-    # Both endpoints failed
-    log.error("Could not fetch tracks from Spotify playlist %s (tried /items and /tracks)",
-              playlist_id)
-    return playlist_name, []
+        items = data.get("items", [])
+        total = data.get("total", 0)
+
+        for item in items:
+            track = item.get("item")
+            if not track or track.get("type") != "track":
+                continue  # skip episodes, local files etc
+            artists = track.get("artists", [{}])
+            tracks.append({
+                "spotify_id": track.get("id"),
+                "title":      track.get("name", ""),
+                "artist":     artists[0].get("name", "") if artists else "",
+                "album":      track.get("album", {}).get("name", ""),
+            })
+
+        # Pagination
+        if not data.get("next") or offset + 100 >= total:
+            break
+        offset += 100
+
+    log.info("Fetched %d tracks from Spotify playlist '%s'", len(tracks), playlist_name)
+    return playlist_name, tracks
 
 
 async def test_connection() -> bool:
