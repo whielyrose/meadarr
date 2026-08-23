@@ -73,7 +73,7 @@ export default function DiscoverPage() {
     const cacheKey = `discover:${key}`
 
     // Skip if already loaded and not forcing refresh
-    if (!force && cache.get(cacheKey)?.data?.loaded) return
+    if (!force && cache.get<TabState>(cacheKey)?.data?.loaded) return
 
     setLoading(true)
     try {
@@ -213,7 +213,7 @@ export default function DiscoverPage() {
             <Icon size={13} />
             <span className="hidden sm:inline">{label}</span>
             {/* Show cached indicator */}
-            {cache.get(`discover:${getKey(id)}`)?.data?.loaded && tab !== id && (
+            {cache.get<TabState>(`discover:${getKey(id)}`)?.data?.loaded && tab !== id && (
               <span className="hidden sm:inline w-1.5 h-1.5 rounded-full bg-green-400/60 ml-0.5" />
             )}
           </button>
