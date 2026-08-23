@@ -38,21 +38,35 @@ def _has_listenbrainz() -> bool:
 
 
 @router.get("/recommended-artists")
-async def get_recommended_artists(limit: int = Query(20, ge=1, le=100)):
+async def get_recommended_artists(
+    limit: int = Query(20, ge=1, le=100),
+    source: str = Query("auto", regex="^(auto|listenbrainz|lastfm)$"),
+):
     """
-    Get artist recommendations based on listening history.
-    Uses ListenBrainz if configured, falls back to Last.fm.
+    Get artist recommendations.
+    - source=listenbrainz: force ListenBrainz (needs troi-bot follow)
+    - source=lastfm: force Last.fm
+    - source=auto: try ListenBrainz first, fall back to Last.fm
     """
     artists = []
+    used_source = "none"
 
-    if _has_listenbrainz():
-        artists = await listenbrainz.get_recommended_artists(limit=limit)
+    if source == "listenbrainz" or (source == "auto" and _has_listenbrainz()):
+        if _has_listenbrainz():
+            artists = await listenbrainz.get_recommended_artists(limit=limit)
+            used_source = "listenbrainz"
 
-    if not artists and _has_lastfm():
-        artists = await lastfm.get_recommended_artists(limit=limit)
+    if source == "lastfm" or (source == "auto" and not artists):
+        if _has_lastfm():
+            artists = await lastfm.get_recommended_artists(limit=limit)
+            used_source = "lastfm"
 
-    source = "listenbrainz" if _has_listenbrainz() else "lastfm" if _has_lastfm() else "none"
-    return {"artists": artists, "source": source}
+    return {
+        "artists": artists,
+        "source": used_source,
+        "listenbrainz_available": _has_listenbrainz(),
+        "lastfm_available": _has_lastfm(),
+    }
 
 
 @router.get("/top-artists")

@@ -73,8 +73,12 @@ export const api = {
     retry:  (id: number)          => post(`/requests/${id}/retry`),
   },
   discover: {
-    recommendedArtists: (limit = 20) =>
-      get<{ artists: ArtistRec[]; source: string }>(`/discover/recommended-artists?limit=${limit}`),
+    recommendedArtists: (limit = 20, source: 'auto' | 'listenbrainz' | 'lastfm' = 'auto') =>
+      get<{
+        artists: ArtistRec[]; source: string
+        listenbrainz_available?: boolean
+        lastfm_available?: boolean
+      }>(`/discover/recommended-artists?limit=${limit}&source=${source}`),
     topArtists: (period = 'overall', limit = 20) =>
       get<{ artists: ArtistRec[]; source: string }>(`/discover/top-artists?period=${period}&limit=${limit}`),
     topAlbums: (period = 'overall', limit = 20) =>

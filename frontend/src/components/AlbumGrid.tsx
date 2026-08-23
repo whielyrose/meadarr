@@ -73,15 +73,16 @@ export function AlbumTile({
 
         {/* Preview play button — top left corner */}
         <button
-          onClick={e => { e.stopPropagation(); setShowPreview(true) }}
-          className="absolute top-2 left-2 w-8 h-8 rounded-full bg-accent-500/90 hover:bg-accent-500 backdrop-blur-sm text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg"
+          type="button"
+          onClick={e => { e.stopPropagation(); e.preventDefault(); setShowPreview(true) }}
+          className="absolute top-2 left-2 z-20 w-8 h-8 rounded-full bg-accent-500 hover:bg-accent-400 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg cursor-pointer"
           title="Preview album"
         >
-          <Play size={12} fill="currentColor" className="ml-0.5" />
+          <Play size={12} fill="currentColor" className="ml-0.5 pointer-events-none" />
         </button>
 
         {/* Hover overlay with actions */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2.5">
+        <div className="absolute inset-0 z-10 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2.5 pointer-events-none [&_button]:pointer-events-auto">
           <p className="text-xs font-semibold text-white leading-tight line-clamp-2 mb-1">
             {item.title}
           </p>
