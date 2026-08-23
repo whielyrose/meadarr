@@ -187,33 +187,44 @@ async def remove_track(track_id: int):
 async def get_album_art(artist: str, album: str, mbid: str = None):
     """
     Get album art URL for a given artist/album.
-    Uses Last.fm as primary source, falls back to Cover Art Archive.
-    Results are cached to avoid repeated API calls.
-    Returns {url: string | null}
+    Tries multiple sources in parallel for fastest response:
+    1. Cover Art Archive (via MBID)
+    2. Last.fm
+    3. iTunes Search API (fallback, no key needed)
+    Cached in SQLite for 30 days.
     """
     import time
+    import asyncio
+    import json
     import aiohttp
     from database.models import get_connection, get_setting
 
-    # Check cache first
-    cache_key = f"art_{artist}_{album}".lower().replace(" ", "_")[:80]
+    # Cache key
+    def _norm(s: str) -> str:
+        return "".join(c for c in s.lower() if c.isalnum() or c in " -")
+
+    cache_key = f"albumart_{_norm(artist)}_{_norm(album)}"[:180]
+
+    # Check cache
     conn = get_connection()
     try:
         row = conn.execute(
             "SELECT result_json, cached_at FROM search_cache WHERE cache_key = ?",
-            (f"albumart_{cache_key}",)
+            (cache_key,)
         ).fetchone()
-        if row and (int(time.time()) - row["cached_at"]) < 86400 * 7:  # 7 day cache
-            import json
-            return json.loads(row["result_json"])
+        if row and (int(time.time()) - row["cached_at"]) < 86400 * 30:
+            cached = json.loads(row["result_json"])
+            if cached.get("url"):
+                return cached
     finally:
         conn.close()
 
-    art_url = None
-
-    # Try Last.fm first (we have the API key configured)
+    # Try multiple sources in parallel
     lastfm_key = get_setting("lastfm_api_key")
-    if lastfm_key:
+
+    async def try_lastfm() -> str | None:
+        if not lastfm_key:
+            return None
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -226,53 +237,120 @@ async def get_album_art(artist: str, album: str, mbid: str = None):
                         "format": "json",
                         "autocorrect": "1",
                     },
-                    timeout=aiohttp.ClientTimeout(total=8),
+                    timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        images = data.get("album", {}).get("image", [])
-                        # Last.fm returns sizes: small, medium, large, extralarge, mega
-                        for img in reversed(images):
-                            url = img.get("#text", "")
-                            if url and "2a96cbd8b46e442fc41c2b86b821562f" not in url:
-                                # Skip the default "no image" hash
-                                art_url = url
-                                break
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    images = data.get("album", {}).get("image", [])
+                    for img in reversed(images):
+                        url = img.get("#text", "")
+                        # Skip default placeholder
+                        if url and "2a96cbd8b46e442fc41c2b86b821562f" not in url:
+                            return url
         except Exception as e:
-            log.debug("Last.fm art fetch failed for %s - %s: %s", artist, album, e)
+            log.debug("Last.fm art failed: %s", e)
+        return None
 
-    # Fall back to Cover Art Archive if we have an MBID
-    if not art_url and mbid:
+    async def try_caa() -> str | None:
+        if not mbid:
+            return None
         try:
             async with aiohttp.ClientSession() as session:
-                # Fetch JSON listing first to get the actual image URL
                 async with session.get(
                     f"https://coverartarchive.org/release-group/{mbid}",
                     headers={
                         "User-Agent": "Meadarr/1.0 (https://github.com/whielyrose/meadarr)",
                         "Accept": "application/json",
                     },
-                    timeout=aiohttp.ClientTimeout(total=8),
+                    timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for img in data.get("images", []):
-                            if img.get("front", False):
-                                thumbs = img.get("thumbnails", {})
-                                art_url = (
-                                    thumbs.get("250") or
-                                    thumbs.get("small") or
-                                    thumbs.get("500") or
-                                    img.get("image")
-                                )
-                                break
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    for img in data.get("images", []):
+                        if img.get("front", False):
+                            thumbs = img.get("thumbnails", {})
+                            return (
+                                thumbs.get("500") or
+                                thumbs.get("large") or
+                                thumbs.get("250") or
+                                thumbs.get("small") or
+                                img.get("image")
+                            )
         except Exception as e:
-            log.debug("CAA art fetch failed for %s: %s", mbid, e)
+            log.debug("CAA art failed: %s", e)
+        return None
 
+    async def try_itunes() -> str | None:
+        """iTunes Search API — no key needed."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://itunes.apple.com/search",
+                    params={
+                        "term": f"{artist} {album}",
+                        "entity": "album",
+                        "limit": 1,
+                    },
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    results = data.get("results", [])
+                    if results:
+                        # iTunes returns 100x100 by default; upgrade to 500x500
+                        art = results[0].get("artworkUrl100", "")
+                        if art:
+                            return art.replace("100x100", "500x500")
+        except Exception as e:
+            log.debug("iTunes art failed: %s", e)
+        return None
+
+    # Race all sources - first non-None wins
+    tasks = [try_caa(), try_lastfm(), try_itunes()]
+    art_url = None
+
+    # Use asyncio.wait to get results as they come in
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(t) for t in tasks],
+        return_when=asyncio.FIRST_COMPLETED,
+        timeout=6.0,
+    )
+
+    # Check results in order of preference
+    results = {}
+    for task in done:
+        try:
+            result = task.result()
+            if result:
+                results[str(task.get_coro())] = result
+        except Exception:
+            pass
+
+    # Wait a bit more for other sources to see if they respond
+    if not results and pending:
+        more_done, still_pending = await asyncio.wait(pending, timeout=3.0)
+        for task in more_done:
+            try:
+                result = task.result()
+                if result:
+                    results[str(task.get_coro())] = result
+            except Exception:
+                pass
+        # Cancel any still pending
+        for task in still_pending:
+            task.cancel()
+    else:
+        for task in pending:
+            task.cancel()
+
+    # Pick first available
+    art_url = next(iter(results.values()), None) if results else None
+
+    # Cache result (even if None, to avoid retrying failed lookups)
     result = {"url": art_url}
-
-    # Cache the result
-    import json
     conn = get_connection()
     try:
         conn.execute(
@@ -282,7 +360,7 @@ async def get_album_art(artist: str, album: str, mbid: str = None):
                  result_json = excluded.result_json,
                  cached_at = strftime('%s','now'),
                  ttl_seconds = excluded.ttl_seconds""",
-            (f"albumart_{cache_key}", json.dumps(result), 86400 * 7)
+            (cache_key, json.dumps(result), 86400 * 30)
         )
         conn.commit()
     finally:

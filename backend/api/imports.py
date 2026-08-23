@@ -16,6 +16,8 @@ from services import jellyfin, notifier
 from services.spotify import extract_playlist_id, get_playlist_tracks, get_playlist_info
 from services.library_scanner import track_exists
 from services.orchestrator import process_request
+from services.slskd import cleanup_download_folder
+from database.models import get_setting
 
 log = logging.getLogger("meadarr.api.imports")
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -28,6 +30,16 @@ class SpotifyImportRequest(BaseModel):
     format_pref: str = "mp3"
     download_missing: bool = True
     confirmed: bool = False  # must be True to actually start downloads
+
+
+
+def _should_cleanup_slskd() -> bool:
+    """Check if user wants slskd downloads deleted after import."""
+    val = get_setting("delete_slskd_after_import")
+    if not val:
+        return False
+    return str(val).lower() in ("true", "1", "on", "yes")
+
 
 
 async def _lb_get(path: str, token: str) -> dict | None:
@@ -337,6 +349,13 @@ async def _import_listenbrainz_playlist(
         playlist_id = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id:
             await notifier.notify_playlist_created(playlist_name, len(tracks))
+            # Clean up slskd downloads folder if enabled
+            if _should_cleanup_slskd():
+                try:
+                    removed = cleanup_download_folder()
+                    log.info("Cleaned slskd downloads: %d files removed", removed)
+                except Exception as e:
+                    log.error("slskd cleanup failed: %s", e)
 
     background_tasks.add_task(_process)
 
@@ -461,6 +480,13 @@ async def import_spotify_playlist(
         playlist_id_jf = await _create_jellyfin_playlist(playlist_name, tracks)
         if playlist_id_jf:
             await notifier.notify_playlist_created(playlist_name, len(tracks))
+            # Clean up slskd downloads folder if enabled
+            if _should_cleanup_slskd():
+                try:
+                    removed = cleanup_download_folder()
+                    log.info("Cleaned slskd downloads: %d files removed", removed)
+                except Exception as e:
+                    log.error("slskd cleanup failed: %s", e)
             conn = get_connection()
             try:
                 existing = conn.execute(

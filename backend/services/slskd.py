@@ -423,3 +423,56 @@ async def test_connection() -> bool:
         return False
     result = await _slskd_request("GET", "/api/v0/application")
     return result is not None
+
+
+
+def cleanup_download_folder(subfolder: str = None) -> int:
+    """
+    Delete files from slskd downloads folder after import complete.
+    If subfolder is provided, only that subfolder is removed.
+    Otherwise removes all completed downloads that have been imported.
+    Returns count of files removed.
+    """
+    import shutil
+    import logging
+    log = logging.getLogger("meadarr.slskd")
+
+    from pathlib import Path
+    downloads_root = Path("/slskd-downloads")
+
+    if not downloads_root.exists():
+        log.warning("slskd downloads folder not found: %s", downloads_root)
+        return 0
+
+    files_removed = 0
+
+    if subfolder:
+        target = downloads_root / subfolder
+        if target.exists() and target.is_dir():
+            try:
+                # Count files first
+                files_removed = sum(1 for _ in target.rglob("*") if _.is_file())
+                shutil.rmtree(target)
+                log.info("Removed slskd download folder: %s (%d files)", target, files_removed)
+            except Exception as e:
+                log.error("Failed to remove %s: %s", target, e)
+                return 0
+    else:
+        # Clean everything at root that's not a hidden folder
+        for item in downloads_root.iterdir():
+            if item.name.startswith("."):
+                continue
+            try:
+                if item.is_dir():
+                    count = sum(1 for _ in item.rglob("*") if _.is_file())
+                    shutil.rmtree(item)
+                    files_removed += count
+                elif item.is_file():
+                    item.unlink()
+                    files_removed += 1
+            except Exception as e:
+                log.error("Failed to remove %s: %s", item, e)
+
+        log.info("Cleaned slskd downloads folder (%d files removed)", files_removed)
+
+    return files_removed

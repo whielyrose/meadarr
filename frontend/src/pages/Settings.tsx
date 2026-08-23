@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, Save, TestTube, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react'
+import { Settings, Save, TestTube, Eye, EyeOff, CheckCircle, XCircle, Bell, HardDrive } from 'lucide-react'
 import { api } from '../api'
 
 interface TestResult { ok: boolean; message: string }
@@ -49,6 +49,23 @@ function SecretInput({ label, settingKey, value, onChange, placeholder }: {
       </div>
     </div>
   )
+}
+
+
+const NOTIFICATION_EVENTS = [
+  { key: 'notify_download_started',        label: 'Download Started',      description: 'When a download request is queued' },
+  { key: 'notify_download_complete',       label: 'Download Complete',     description: 'When an album finishes downloading' },
+  { key: 'notify_download_failed',         label: 'Download Failed',       description: 'When a download fails or times out' },
+  { key: 'notify_playlist_created',        label: 'Playlist Created',      description: 'When a playlist is synced to Jellyfin' },
+  { key: 'notify_library_scan_complete',   label: 'Library Scan Complete', description: 'When a library scan finishes' },
+  { key: 'notify_import_started',          label: 'Import Started',        description: 'When a playlist import begins' },
+  { key: 'notify_import_complete',         label: 'Import Complete',       description: 'When a playlist import finishes' },
+]
+
+function isNotifyEnabled(val: string | undefined): boolean {
+  if (val === undefined || val === null || val === '') return true
+  const lower = String(val).toLowerCase()
+  return !['false', '0', 'off', 'no'].includes(lower)
 }
 
 const SECTIONS = [
@@ -191,6 +208,74 @@ export default function SettingsPage() {
             <TestButton onTest={getTestFn(section.testKey)} label={section.testLabel} />
           </div>
         ))}
+
+        {/* ── Notification Events ─────────────────────────────────────────── */}
+        <div className="card space-y-3">
+          <div className="flex items-center gap-2">
+            <Bell size={16} className="text-accent-400" />
+            <div>
+              <h2 className="font-semibold text-gray-200">Fluxer Notifications</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Toggle which events send a notification to your Fluxer webhook.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-2 divide-y divide-surface-700">
+            {NOTIFICATION_EVENTS.map(ev => {
+              const enabled = isNotifyEnabled(values[ev.key])
+              return (
+                <label key={ev.key}
+                  className="flex items-center gap-3 py-2.5 cursor-pointer group">
+                  <button type="button"
+                    onClick={() => set(ev.key, enabled ? 'false' : 'true')}
+                    className={`relative w-9 h-5 rounded-full transition-colors ${
+                      enabled ? 'bg-accent-500' : 'bg-surface-700'
+                    }`}>
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      enabled ? 'translate-x-4' : ''
+                    }`} />
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-200 font-medium">{ev.label}</p>
+                    <p className="text-xs text-muted-500">{ev.description}</p>
+                  </div>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* ── slskd downloads cleanup ─────────────────────────────────────── */}
+        <div className="card space-y-3">
+          <div className="flex items-center gap-2">
+            <HardDrive size={16} className="text-accent-400" />
+            <div>
+              <h2 className="font-semibold text-gray-200">slskd Downloads</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Manage slskd's downloads folder to save disk space.
+              </p>
+            </div>
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer group">
+            <button type="button"
+              onClick={() => set('delete_slskd_after_import', 
+                isNotifyEnabled(values.delete_slskd_after_import) && values.delete_slskd_after_import !== undefined
+                  ? 'false' : 'true')}
+              className={`relative w-9 h-5 rounded-full transition-colors ${
+                values.delete_slskd_after_import === 'true' ? 'bg-accent-500' : 'bg-surface-700'
+              }`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                values.delete_slskd_after_import === 'true' ? 'translate-x-4' : ''
+              }`} />
+            </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-slate-200 font-medium">Delete files after import</p>
+              <p className="text-xs text-muted-500">
+                Automatically clear the slskd downloads folder after files are copied to Jellyfin and the playlist is created.
+              </p>
+            </div>
+          </label>
+        </div>
 
         <div className="flex items-center gap-3">
           <button className="btn-primary flex items-center gap-2" onClick={save} disabled={loading}>

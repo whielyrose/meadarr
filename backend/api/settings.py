@@ -22,6 +22,16 @@ class SettingsUpdate(BaseModel):
     listenbrainz_token: str | None = None
     listenbrainz_username: str | None = None
     fluxer_webhook_url: str | None = None
+    # Notification event toggles (default all enabled)
+    notify_download_started: str | None = None
+    notify_download_complete: str | None = None
+    notify_download_failed: str | None = None
+    notify_playlist_created: str | None = None
+    notify_library_scan_complete: str | None = None
+    notify_import_started: str | None = None
+    notify_import_complete: str | None = None
+    # slskd downloads cleanup
+    delete_slskd_after_import: str | None = None
     default_format: str | None = None
     upgrade_to_flac: str | None = None
     auto_scan_interval_hours: str | None = None
