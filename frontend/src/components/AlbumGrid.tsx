@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Disc3, ChevronLeft, ChevronRight, Download, CheckCircle,
-  ArrowUpCircle, Music2, LayoutGrid, List,
+  ArrowUpCircle, Music2, LayoutGrid, List, Play,
 } from 'lucide-react'
+import PreviewModal from './PreviewModal'
 
 export const GRID_PAGE_SIZE = 25 // 5 x 5
 
@@ -48,6 +49,7 @@ export function AlbumTile({
 }) {
   const artUrl = useAlbumArt(item.artist, item.title, item.mbid)
   const [failed, setFailed] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
 
   return (
     <div className="group flex flex-col">
@@ -68,6 +70,15 @@ export function AlbumTile({
             <CheckCircle className="text-white" size={12} />
           </div>
         )}
+
+        {/* Preview play button — top left corner */}
+        <button
+          onClick={e => { e.stopPropagation(); setShowPreview(true) }}
+          className="absolute top-2 left-2 w-8 h-8 rounded-full bg-accent-500/90 hover:bg-accent-500 backdrop-blur-sm text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg"
+          title="Preview album"
+        >
+          <Play size={12} fill="currentColor" className="ml-0.5" />
+        </button>
 
         {/* Hover overlay with actions */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2.5">
@@ -119,6 +130,14 @@ export function AlbumTile({
           </span>
         )}
       </p>
+
+      {showPreview && (
+        <PreviewModal
+          artist={item.artist}
+          album={item.title}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   )
 }
@@ -265,6 +284,7 @@ export function AlbumRow({
 }) {
   const artUrl = useAlbumArt(item.artist, item.title, item.mbid)
   const [failed, setFailed] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
 
   return (
     <div className="flex items-center gap-3 bg-surface-800 rounded-lg border border-surface-700 px-3 py-2.5 hover:border-accent-500/20 transition-all">
@@ -301,7 +321,14 @@ export function AlbumRow({
           )}
         </p>
       </div>
-      <div className="shrink-0">
+      <div className="shrink-0 flex items-center gap-1">
+        <button
+          onClick={() => setShowPreview(true)}
+          className="btn-ghost p-2"
+          title="Preview album"
+        >
+          <Play size={13} />
+        </button>
         {feedback ? (
           <span className="text-xs text-accent-300 flex items-center gap-1">
             <CheckCircle size={12} /> {feedback}
@@ -323,6 +350,14 @@ export function AlbumRow({
           </button>
         ) : null}
       </div>
+
+      {showPreview && (
+        <PreviewModal
+          artist={item.artist}
+          album={item.title}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   )
 }

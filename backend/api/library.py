@@ -367,3 +367,61 @@ async def get_album_art(artist: str, album: str, mbid: str = None):
         conn.close()
 
     return result
+
+
+
+@router.get("/previews")
+async def get_album_previews(artist: str, album: str):
+    """
+    Get 30-second preview snippets for tracks on an album, via Deezer's public API.
+    Cached for 30 days. Returns {tracks: [{position, title, preview_url}]}.
+    """
+    import time
+    import json
+    from database.models import get_connection
+    from services import deezer
+
+    def _norm(s: str) -> str:
+        return "".join(c for c in s.lower() if c.isalnum() or c in " -")
+
+    cache_key = f"previews_{_norm(artist)}_{_norm(album)}"[:180]
+
+    # Check cache
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT result_json, cached_at FROM search_cache WHERE cache_key = ?",
+            (cache_key,)
+        ).fetchone()
+        if row and (int(time.time()) - row["cached_at"]) < 86400 * 30:
+            return json.loads(row["result_json"])
+    finally:
+        conn.close()
+
+    # Fetch from Deezer
+    result = await deezer.get_previews(artist, album)
+
+    payload = {
+        "found":  bool(result),
+        "tracks": result.get("tracks", []) if result else [],
+        "album":  result.get("album_name", "") if result else "",
+        "artist": result.get("artist", "") if result else "",
+    }
+
+    # Cache result even if empty (to avoid hammering Deezer for missing albums)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO search_cache (cache_key, result_json, ttl_seconds)
+               VALUES (?, ?, ?)
+               ON CONFLICT(cache_key) DO UPDATE SET
+                 result_json = excluded.result_json,
+                 cached_at = strftime('%s','now'),
+                 ttl_seconds = excluded.ttl_seconds""",
+            (cache_key, json.dumps(payload), 86400 * 30)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return payload
