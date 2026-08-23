@@ -95,7 +95,14 @@ async def _poll_until_complete(peer: str, filename: str,
     Returns True if completed successfully, False if failed/timed out.
     """
     start = time.time()
-    fname = Path(filename).name
+    # Normalize Windows backslash paths from Soulseek peers
+    _norm = filename.replace('\\\\', '/').replace('\\', '/')
+    fname = _norm.split('/')[-1] or Path(filename).name
+
+    def _get_fname(f_path: str) -> str:
+        """Extract filename from a slskd path, handling Windows backslashes."""
+        n = f_path.replace('\\\\', '/').replace('\\', '/')
+        return n.split('/')[-1] if n else Path(f_path).name
 
     while time.time() - start < timeout:
         await asyncio.sleep(POLL_INTERVAL)
@@ -113,13 +120,13 @@ async def _poll_until_complete(peer: str, filename: str,
                 if transfer.get("username") == peer:
                     for file_transfer in transfer.get("directories", [{}]):
                         for f in file_transfer.get("files", []):
-                            if Path(f.get("filename", "")).name == fname:
+                            if _get_fname(f.get("filename", "")) == fname:
                                 found = f
                                 break
                     if found:
                         break
                 # Flat structure
-                if Path(transfer.get("filename", "")).name == fname:
+                if _get_fname(transfer.get("filename", "")) == fname:
                     found = transfer
                     break
 
