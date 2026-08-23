@@ -1,91 +1,85 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Search, Download, CheckCircle, ArrowUpCircle, Music2 } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { Search } from 'lucide-react'
 import { api, Release } from '../api'
-
-// Fetches art URL via backend — avoids CORS issues with CAA redirects
-function useAlbumArt(mbid?: string, artist?: string, album?: string) {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    if (!artist || !album) return
-    let cancelled = false
-    const params = new URLSearchParams({ artist, album })
-    if (mbid) params.set('mbid', mbid)
-    fetch(`/api/library/art?${params}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (!cancelled && d?.url) setUrl(d.url) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [mbid, artist, album])
-  return url
-}
-
-function AlbumArt({ release }: { release: Release }) {
-  const artUrl = useAlbumArt(release.mbid, release.artist, release.title)
-  const [failed, setFailed] = useState(false)
-
-  return artUrl && !failed ? (
-    <img src={artUrl} alt={release.title}
-      className="w-10 h-10 rounded-lg object-cover bg-surface-700 shrink-0 border border-surface-600"
-      onError={() => setFailed(true)} loading="lazy" />
-  ) : (
-    <div className="w-10 h-10 bg-surface-700 rounded-lg shrink-0 flex items-center justify-center border border-surface-600">
-      <Music2 className="text-muted-600" size={16} />
-    </div>
-  )
-}
+import { PaginatedAlbumGrid, ViewToggle, AlbumTileItem } from '../components/AlbumGrid'
 
 export default function SearchPage() {
-  const [query, setQuery]       = useState('')
-  const [results, setResults]   = useState<Release[]>([])
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState<string | null>(null)
+  const [query, setQuery]     = useState('')
+  const [results, setResults] = useState<Release[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState<string | null>(null)
   const [requesting, setRequesting] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<Record<string, string>>({})
+  const [feedback, setFeedback]   = useState<Record<string, string>>({})
   const [formatPref, setFormatPref] = useState<'mp3' | 'flac'>('mp3')
+  const [viewMode, setViewMode]     = useState<'grid' | 'list'>('grid')
 
   const doSearch = useCallback(async () => {
     if (query.trim().length < 2) return
     setLoading(true); setError(null)
     try {
-      const data = await api.search.releases(query.trim())
+      const data = await api.search.releases(query.trim(), 100)  // fetch more, paginate client side
       setResults(data.results)
-    } catch (e: any) { setError(e.message) }
-    finally { setLoading(false) }
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
   }, [query])
 
-  const requestAlbum = async (release: Release, upgrade = false) => {
-    const key = upgrade ? release.mbid + '_u' : release.mbid
+  // Transform Release to AlbumTileItem
+  const items: AlbumTileItem[] = results.map(r => ({
+    artist:          r.artist,
+    title:           r.title,
+    year:            r.year,
+    mbid:            r.mbid,
+    in_library:      r.in_library,
+    can_upgrade:     r.can_upgrade,
+    library_quality: r.library_quality,
+    type:            r.type,
+  }))
+
+  const requestAlbum = async (item: AlbumTileItem, upgrade = false) => {
+    const key = `${item.artist}|${item.title}` + (upgrade ? '_u' : '')
     setRequesting(key)
     try {
       const result = await api.requests.album({
-        artist: release.artist,
-        album: release.title,
-        year: release.year ? parseInt(release.year) : undefined,
-        mbid: release.mbid,
+        artist:      item.artist,
+        album:       item.title,
+        year:        item.year ? parseInt(String(item.year)) : undefined,
+        mbid:        item.mbid,
         format_pref: upgrade ? 'flac' : formatPref,
-        force: upgrade,
+        force:       upgrade,
       })
-      setFeedback(prev => ({ ...prev, [release.mbid]: `#${result.request_id}` }))
+      setFeedback(prev => ({ ...prev, [`${item.artist}|${item.title}`]: `Queued #${result.request_id}` }))
     } catch (e: any) {
-      setFeedback(prev => ({ ...prev, [release.mbid]: '✗' }))
-    } finally { setRequesting(null) }
+      setFeedback(prev => ({ ...prev, [`${item.artist}|${item.title}`]: '✗' }))
+    } finally {
+      setRequesting(null)
+    }
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="page-header">
         <div>
           <h1 className="page-title">Search</h1>
           <p className="page-subtitle">Find any album or artist on MusicBrainz</p>
         </div>
+        {results.length > 0 && <ViewToggle mode={viewMode} onChange={setViewMode} />}
       </div>
 
+      {/* Search bar */}
       <div className="flex gap-3 mb-6">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-500" size={15} />
-          <input className="input pl-9" placeholder="Artist, album, or track..."
-            value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && doSearch()} autoFocus />
+          <input
+            className="input pl-9"
+            placeholder="Artist, album, or track..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && doSearch()}
+            autoFocus
+          />
         </div>
         <select className="input w-28" value={formatPref}
           onChange={e => setFormatPref(e.target.value as 'mp3' | 'flac')}>
@@ -109,57 +103,14 @@ export default function SearchPage() {
           <p className="text-xs text-muted-500 mb-3 uppercase tracking-wider font-medium">
             {results.length} results for "{query}"
           </p>
-          <div className="space-y-2 animate-slide-in">
-            {results.map(release => {
-              const fb = feedback[release.mbid]
-              const isReq = requesting === release.mbid || requesting === release.mbid + '_u'
-
-              return (
-                <div key={release.mbid}
-                  className="flex items-center gap-3 bg-surface-800 rounded-xl border border-surface-700 px-4 py-3 hover:border-surface-600 transition-all">
-                  <AlbumArt release={release} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-100 truncate text-sm">{release.title}</span>
-                      {release.year && <span className="text-xs text-muted-500">{release.year}</span>}
-                      {release.type && release.type !== 'Album' && (
-                        <span className="badge badge-gray">{release.type}</span>
-                      )}
-                      {release.in_library && (
-                        <span className="badge badge-purple">
-                          In Library{release.library_quality ? ` · ${release.library_quality.toUpperCase()}` : ''}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-400 mt-0.5 truncate">{release.artist}</p>
-                  </div>
-                  <div className="shrink-0 flex items-center gap-2">
-                    {fb ? (
-                      <span className="text-xs text-accent-300 flex items-center gap-1">
-                        <CheckCircle size={12} /> Queued {fb}
-                      </span>
-                    ) : release.in_library ? (
-                      <div className="flex items-center gap-2">
-                        <CheckCircle className="text-green-500" size={16} />
-                        {release.can_upgrade && (
-                          <button className="btn-secondary flex items-center gap-1 py-1.5 text-xs"
-                            onClick={() => requestAlbum(release, true)} disabled={isReq}>
-                            <ArrowUpCircle size={13} /> FLAC
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      <button className="btn-primary flex items-center gap-1 py-1.5 text-xs"
-                        onClick={() => requestAlbum(release)} disabled={isReq}>
-                        <Download size={13} />
-                        {isReq ? '...' : 'Request'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          <PaginatedAlbumGrid
+            items={items}
+            viewMode={viewMode}
+            onRequest={item => requestAlbum(item, false)}
+            onUpgrade={item => requestAlbum(item, true)}
+            requesting={requesting}
+            feedback={feedback}
+          />
         </>
       )}
 

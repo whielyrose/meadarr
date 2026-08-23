@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Compass, Download, CheckCircle, RefreshCw, TrendingUp, Star, Zap } from 'lucide-react'
-import { api, AlbumRec, ArtistRec } from '../api'
+import { Compass, RefreshCw, TrendingUp, Star, Zap } from 'lucide-react'
+import { api } from '../api'
+import { PaginatedAlbumGrid, ViewToggle, AlbumTileItem } from '../components/AlbumGrid'
 
 type Tab = 'missing' | 'top-albums' | 'recommendations' | 'new-releases'
+
 const PERIODS = [
   { value: 'overall', label: 'All Time' },
   { value: '12month', label: '12 Months' },
@@ -11,70 +13,122 @@ const PERIODS = [
 ]
 
 const TABS: { id: Tab; label: string; icon: any }[] = [
-  { id: 'missing',         label: 'Missing',         icon: Star     },
-  { id: 'top-albums',      label: 'Top Albums',       icon: TrendingUp },
-  { id: 'recommendations', label: 'Recommended',      icon: Compass  },
-  { id: 'new-releases',    label: 'New Releases',     icon: Zap      },
+  { id: 'missing',         label: 'Missing',       icon: Star },
+  { id: 'top-albums',      label: 'Top Albums',    icon: TrendingUp },
+  { id: 'recommendations', label: 'Recommended',   icon: Compass },
+  { id: 'new-releases',    label: 'New Releases',  icon: Zap },
 ]
 
 export default function DiscoverPage() {
-  const [tab, setTab]               = useState<Tab>('missing')
-  const [period, setPeriod]         = useState('overall')
-  const [items, setItems]           = useState<any[]>([])
-  const [source, setSource]         = useState('')
-  const [loading, setLoading]       = useState(false)
+  const [tab, setTab]           = useState<Tab>('missing')
+  const [period, setPeriod]     = useState('overall')
+  const [items, setItems]       = useState<AlbumTileItem[]>([])
+  const [source, setSource]     = useState('')
+  const [loading, setLoading]   = useState(false)
   const [requesting, setRequesting] = useState<string | null>(null)
   const [feedback, setFeedback]     = useState<Record<string, string>>({})
   const [error, setError]           = useState<string | null>(null)
+  const [viewMode, setViewMode]     = useState<'grid' | 'list'>('grid')
 
   const fetchData = async () => {
     setLoading(true); setError(null); setItems([])
     try {
       let data: any
+      let transformed: AlbumTileItem[] = []
+
       switch (tab) {
         case 'missing':
-          data = await api.discover.missingFromLibrary(30); setItems(data.albums || []); break
+          data = await api.discover.missingFromLibrary(100)
+          transformed = (data.albums || []).map((a: any): AlbumTileItem => ({
+            artist:     a.artist,
+            title:      a.name,
+            in_library: false,
+            extra:      a.playcount || a.listen_count
+              ? Number(a.playcount || a.listen_count).toLocaleString()
+              : undefined,
+            extra_label: a.playcount || a.listen_count ? 'plays' : undefined,
+          }))
+          break
         case 'top-albums':
-          data = await api.discover.topAlbums(period, 30); setItems(data.albums || [])
-          setSource(data.source || ''); break
+          data = await api.discover.topAlbums(period, 100)
+          transformed = (data.albums || []).map((a: any): AlbumTileItem => ({
+            artist:          a.artist,
+            title:           a.name,
+            in_library:      a.in_library,
+            library_quality: a.library_quality,
+            extra:           a.playcount || a.listen_count
+              ? Number(a.playcount || a.listen_count).toLocaleString()
+              : undefined,
+            extra_label:     'plays',
+          }))
+          setSource(data.source || '')
+          break
         case 'recommendations':
-          data = await api.discover.recommendedArtists(20); setItems(data.artists || [])
-          setSource(data.source || ''); break
+          data = await api.discover.recommendedArtists(50)
+          transformed = (data.artists || []).map((a: any): AlbumTileItem => ({
+            artist:     a.name,
+            title:      'Recommended Artist',
+            in_library: a.in_library || false,
+            extra:      a.match || a.similarity
+              ? `${Math.round((a.match || a.similarity) * 100)}%`
+              : undefined,
+            extra_label: 'match',
+          }))
+          setSource(data.source || '')
+          break
         case 'new-releases':
-          data = await api.discover.newReleases(30); setItems(data.releases || []); break
+          data = await api.discover.newReleases(100)
+          transformed = (data.releases || []).map((r: any): AlbumTileItem => ({
+            artist:          r.artist,
+            title:           r.title,
+            year:            r.year,
+            mbid:            r.mbid,
+            type:            r.type,
+            in_library:      r.in_library,
+            library_quality: r.library_quality,
+          }))
+          break
       }
-    } catch (e: any) { setError(e.message) }
-    finally { setLoading(false) }
+
+      setItems(transformed)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { fetchData() }, [tab, period])
 
-  const requestAlbum = async (item: any) => {
-    const key = `${item.artist || item.name}|${item.name || item.title}`
+  const requestAlbum = async (item: AlbumTileItem) => {
+    const key = `${item.artist}|${item.title}`
     setRequesting(key)
     try {
       const result = await api.requests.album({
-        artist: item.artist || item.name,
-        album: item.name || item.title,
-        year: item.year ? parseInt(item.year) : undefined,
-        mbid: item.mbid,
+        artist:      item.artist,
+        album:       item.title,
+        year:        item.year ? parseInt(String(item.year)) : undefined,
+        mbid:        item.mbid,
         format_pref: 'mp3',
       })
-      setFeedback(prev => ({ ...prev, [key]: `#${result.request_id}` }))
+      setFeedback(prev => ({ ...prev, [key]: `Queued #${result.request_id}` }))
     } catch (e: any) {
       setFeedback(prev => ({ ...prev, [key]: '✗' }))
-    } finally { setRequesting(null) }
+    } finally {
+      setRequesting(null)
+    }
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="page-header">
         <div>
           <h1 className="page-title">Discover</h1>
           <p className="page-subtitle">
-            Personalised recommendations from {source || 'ListenBrainz & Last.fm'}
+            Recommendations from {source || 'ListenBrainz & Last.fm'}
           </p>
         </div>
+        {items.length > 0 && <ViewToggle mode={viewMode} onChange={setViewMode} />}
       </div>
 
       {/* Tabs */}
@@ -92,7 +146,7 @@ export default function DiscoverPage() {
         ))}
       </div>
 
-      {/* Period selector */}
+      {/* Period selector for top albums */}
       {tab === 'top-albums' && (
         <div className="flex gap-1.5 mb-4">
           {PERIODS.map(p => (
@@ -111,9 +165,6 @@ export default function DiscoverPage() {
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 text-red-400 rounded-lg p-3 mb-4 text-sm">
           {error}
-          {error.includes('Last.fm') || error.includes('ListenBrainz')
-            ? <span className="block mt-1 text-xs">Configure your music service in Settings.</span>
-            : null}
         </div>
       )}
 
@@ -122,78 +173,23 @@ export default function DiscoverPage() {
           <RefreshCw className="animate-spin text-accent-400 mb-3" size={32} />
           <p className="text-muted-500 text-sm">Loading recommendations...</p>
         </div>
+      ) : items.length > 0 ? (
+        <PaginatedAlbumGrid
+          items={items}
+          viewMode={viewMode}
+          onRequest={requestAlbum}
+          requesting={requesting}
+          feedback={feedback}
+        />
       ) : (
-        <div className="space-y-2 animate-slide-in">
-          {items.map((item, i) => {
-            const key = `${item.artist || item.name}|${item.name || item.title}`
-            const fb = feedback[key]
-            const isReq = requesting === key
-            const inLib = item.in_library
-            const isArtist = tab === 'recommendations'
-
-            return (
-              <div key={i} className="table-row rounded-lg bg-surface-800 border border-surface-700">
-                {item.image ? (
-                  <img src={item.image} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0 bg-surface-700"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                ) : (
-                  <div className="w-10 h-10 bg-surface-700 rounded-lg shrink-0 flex items-center justify-center border border-surface-600">
-                    <Compass className="text-muted-600" size={16} />
-                  </div>
-                )}
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-slate-100 text-sm truncate">
-                      {item.name || item.title}
-                    </span>
-                    {item.year && <span className="text-xs text-muted-500">({item.year})</span>}
-                    {inLib && (
-                      <span className="badge badge-purple">
-                        In Library{item.library_quality ? ` · ${item.library_quality.toUpperCase()}` : ''}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-400 mt-0.5 truncate">
-                    {isArtist ? item.reason : item.artist}
-                    {(item.listen_count || item.playcount) && !isArtist && (
-                      <span className="text-muted-600 ml-2">
-                        {(item.listen_count || item.playcount).toLocaleString()} plays
-                      </span>
-                    )}
-                  </p>
-                </div>
-
-                <div className="shrink-0">
-                  {fb ? (
-                    <span className="text-xs text-accent-300 flex items-center gap-1">
-                      <CheckCircle size={12} /> Queued {fb}
-                    </span>
-                  ) : isArtist ? (
-                    <span className="text-xs text-muted-500">
-                      {Math.round(((item.match || item.similarity || 0) as number) * 100)}% match
-                    </span>
-                  ) : inLib ? (
-                    <CheckCircle className="text-green-500" size={16} />
-                  ) : (
-                    <button className="btn-primary flex items-center gap-1 py-1.5 text-xs"
-                      onClick={() => requestAlbum(item)} disabled={isReq}>
-                      <Download size={12} />
-                      {isReq ? '...' : 'Request'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-
-          {items.length === 0 && !loading && (
-            <div className="empty-state">
-              <Compass className="empty-state-icon" size={52} />
-              <p className="empty-state-title">No recommendations yet</p>
-              <p className="empty-state-text">Configure ListenBrainz or Last.fm in Settings</p>
-            </div>
-          )}
+        <div className="empty-state">
+          <Compass className="empty-state-icon" size={52} />
+          <p className="empty-state-title">No {tab.replace('-', ' ')} available</p>
+          <p className="empty-state-text">
+            {source === 'none'
+              ? 'Configure ListenBrainz or Last.fm in Settings'
+              : 'Try a different tab or check your listening history'}
+          </p>
         </div>
       )}
     </div>
