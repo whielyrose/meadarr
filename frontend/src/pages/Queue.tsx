@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Download, RefreshCw, XCircle, RotateCcw, CheckCircle,
-         Clock, AlertCircle, Trash2, ChevronDown } from 'lucide-react'
+import { Download, RefreshCw, XCircle, RotateCcw,  Trash2, ChevronDown } from 'lucide-react'
 import { api, DownloadRequest } from '../api'
 
 const STATUS = {

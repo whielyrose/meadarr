@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Disc3, ChevronLeft, ChevronRight, Download, CheckCircle,
   ArrowUpCircle, Music2, LayoutGrid, List, Play,
