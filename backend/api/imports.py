@@ -33,6 +33,25 @@ class SpotifyImportRequest(BaseModel):
 
 
 
+
+async def _process_with_concurrency(req_ids: list[int], concurrent: int = 3):
+    """
+    Process download requests with controlled concurrency.
+    Fires up to N searches at once — enough to be fast without overwhelming slskd.
+    """
+    import asyncio
+    sem = asyncio.Semaphore(concurrent)
+
+    async def _one(rid: int):
+        async with sem:
+            try:
+                await process_request(rid)
+            except Exception as e:
+                log.error("process_request failed for %s: %s", rid, e)
+
+    await asyncio.gather(*[_one(rid) for rid in req_ids])
+
+
 def _should_cleanup_slskd() -> bool:
     """Check if user wants slskd downloads deleted after import."""
     val = get_setting("delete_slskd_after_import")
@@ -337,11 +356,10 @@ async def _import_listenbrainz_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
-            # Sequential processing — avoids overwhelming slskd with concurrent searches
+            # Controlled concurrency — up to 3 searches in flight at once
+            # Fast enough to be usable, gentle enough not to overwhelm slskd
             if req_ids:
-                for rid in req_ids:
-                    await process_request(rid)
-                    await asyncio.sleep(2)
+                await _process_with_concurrency(req_ids, concurrent=3)
 
         # Scan Jellyfin and create playlist
         await jellyfin.scan_library()
@@ -468,11 +486,10 @@ async def import_spotify_playlist(
                 )
                 if req_id:
                     req_ids.append(req_id)
-            # Sequential processing — avoids overwhelming slskd with concurrent searches
+            # Controlled concurrency — up to 3 searches in flight at once
+            # Fast enough to be usable, gentle enough not to overwhelm slskd
             if req_ids:
-                for rid in req_ids:
-                    await process_request(rid)
-                    await asyncio.sleep(2)
+                await _process_with_concurrency(req_ids, concurrent=3)
 
         await jellyfin.scan_library()
         await asyncio.sleep(15)

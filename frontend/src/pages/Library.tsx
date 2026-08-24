@@ -2,11 +2,19 @@ import { useState, useEffect, useMemo } from 'react'
 import { Music, Search, RefreshCw } from 'lucide-react'
 import { api, LibraryStats } from '../api'
 import { PaginatedAlbumGrid, ViewToggle, AlbumTileItem } from '../components/AlbumGrid'
+import { useDataCache } from '../components/DataCache'
 
 export default function LibraryPage() {
-  const [stats, setStats]       = useState<LibraryStats | null>(null)
-  const [artists, setArtists]   = useState<any[]>([])
-  const [allAlbums, setAllAlbums] = useState<AlbumTileItem[]>([])
+  const cache = useDataCache()
+  const [stats, setStats]       = useState<LibraryStats | null>(
+    () => cache.get<LibraryStats>('library:stats')?.data ?? null
+  )
+  const [artists, setArtists]   = useState<any[]>(
+    () => cache.get<any[]>('library:artists')?.data ?? []
+  )
+  const [allAlbums, setAllAlbums] = useState<AlbumTileItem[]>(
+    () => cache.get<AlbumTileItem[]>('library:allAlbums')?.data ?? []
+  )
   const [search, setSearch]     = useState('')
   const [loading, setLoading]   = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -19,15 +27,26 @@ export default function LibraryPage() {
       const [s, a] = await Promise.all([api.library.stats(), api.library.artists()])
       setStats(s)
       setArtists(a.artists)
+      cache.set('library:stats', s)
+      cache.set('library:artists', a.artists)
     } catch {}
     finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    // Only fetch if we don't have cached data yet
+    if (!cache.get('library:stats') || !cache.get('library:artists')) {
+      load()
+    }
+  }, [])
 
   // Load all albums across all artists in a flat list
   useEffect(() => {
     if (artists.length === 0) return
+    // Skip fetch if we already have cached albums matching current artist count
+    const cached = cache.get<AlbumTileItem[]>('library:allAlbums')
+    if (cached?.data && cached.data.length > 0 && allAlbums.length > 0) return
+
     let cancelled = false
     setLoadingAlbums(true)
     const all: AlbumTileItem[] = []
@@ -61,6 +80,7 @@ export default function LibraryPage() {
         return a.title.localeCompare(b.title)
       })
       setAllAlbums(all)
+      cache.set('library:allAlbums', all)
       setLoadingAlbums(false)
     }
 
@@ -100,6 +120,19 @@ export default function LibraryPage() {
         </div>
         <div className="flex gap-2 items-center">
           <ViewToggle mode={viewMode} onChange={setViewMode} />
+          <button
+            className="btn-ghost flex items-center gap-2 text-xs"
+            onClick={() => {
+              cache.invalidate('library:stats')
+              cache.invalidate('library:artists')
+              cache.invalidate('library:allAlbums')
+              load()
+            }}
+            disabled={loading || loadingAlbums}
+            title="Refresh from cache"
+          >
+            <RefreshCw size={13} className={loading || loadingAlbums ? 'animate-spin' : ''} />
+          </button>
           <button className="btn-secondary flex items-center gap-2" onClick={triggerScan} disabled={scanning}>
             <RefreshCw size={13} className={scanning ? 'animate-spin' : ''} />
             {scanning ? 'Scanning...' : 'Scan'}

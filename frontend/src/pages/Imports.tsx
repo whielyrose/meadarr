@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Music2, RefreshCw, Download, CheckCircle, Sparkles, List, AlertCircle } from 'lucide-react'
+import { useDataCache } from '../components/DataCache'
 
 interface PreviewResult {
   status: 'preview'
@@ -128,10 +129,15 @@ function ProcessingCard({ result }: { result: ImportResult }) {
 }
 
 export default function ImportsPage() {
-  const [lbPlaylists, setLbPlaylists]     = useState<LBPlaylist[]>([])
+  const cache = useDataCache()
+  const [lbPlaylists, setLbPlaylists]     = useState<LBPlaylist[]>(
+    () => cache.get<LBPlaylist[]>('imports:lbPlaylists')?.data ?? []
+  )
   const [lbSelected, setLbSelected]       = useState<LBPlaylistType>('weekly-jams')
   const [lbLoading, setLbLoading]         = useState(false)
-  const [lbResult, setLbResult]           = useState<LBResult>(null)
+  const [lbResult, setLbResult]           = useState<LBResult>(
+    () => cache.get<LBResult>('imports:lbResult')?.data ?? null
+  )
   const [lbError, setLbError]             = useState<string | null>(null)
   const [lbConfirming, setLbConfirming]   = useState(false)
   const [lbDownload, setLbDownload]       = useState(true)
@@ -140,14 +146,33 @@ export default function ImportsPage() {
   const [spotifyFormat, setSpotifyFormat]     = useState<'mp3' | 'flac'>('mp3')
   const [spotifyDownload, setSpotifyDownload] = useState(true)
   const [spotifyLoading, setSpotifyLoading]   = useState(false)
-  const [spotifyResult, setSpotifyResult]     = useState<SpotifyResult>(null)
+  const [spotifyResult, setSpotifyResult]     = useState<SpotifyResult>(
+    () => cache.get<SpotifyResult>('imports:spotifyResult')?.data ?? null
+  )
   const [spotifyError, setSpotifyError]       = useState<string | null>(null)
   const [spotifyConfirming, setSpotifyConfirming] = useState(false)
 
+  // Persist result state to cache
   useEffect(() => {
+    if (lbResult) cache.set('imports:lbResult', lbResult)
+    else cache.invalidate('imports:lbResult')
+  }, [lbResult])
+
+  useEffect(() => {
+    if (spotifyResult) cache.set('imports:spotifyResult', spotifyResult)
+    else cache.invalidate('imports:spotifyResult')
+  }, [spotifyResult])
+
+  useEffect(() => {
+    if (cache.get('imports:lbPlaylists')) return
     fetch('/api/imports/listenbrainz/playlists')
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setLbPlaylists(d.playlists || []))
+      .then(d => {
+        if (!d) return
+        const playlists = d.playlists || []
+        setLbPlaylists(playlists)
+        cache.set('imports:lbPlaylists', playlists)
+      })
       .catch(() => {})
   }, [])
 

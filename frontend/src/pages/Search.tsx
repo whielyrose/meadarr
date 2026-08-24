@@ -2,10 +2,16 @@ import { useState, useCallback } from 'react'
 import { Search } from 'lucide-react'
 import { api, Release } from '../api'
 import { PaginatedAlbumGrid, ViewToggle, AlbumTileItem } from '../components/AlbumGrid'
+import { useDataCache } from '../components/DataCache'
 
 export default function SearchPage() {
-  const [query, setQuery]     = useState('')
-  const [results, setResults] = useState<Release[]>([])
+  const cache = useDataCache()
+  const [query, setQuery]     = useState(
+    () => cache.get<string>('search:query')?.data ?? ''
+  )
+  const [results, setResults] = useState<Release[]>(
+    () => cache.get<Release[]>('search:results')?.data ?? []
+  )
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
   const [requesting, setRequesting] = useState<string | null>(null)
@@ -17,14 +23,16 @@ export default function SearchPage() {
     if (query.trim().length < 2) return
     setLoading(true); setError(null)
     try {
-      const data = await api.search.releases(query.trim(), 100)  // fetch more, paginate client side
+      const data = await api.search.releases(query.trim(), 100)
       setResults(data.results)
+      cache.set('search:query', query.trim())
+      cache.set('search:results', data.results)
     } catch (e: any) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [query])
+  }, [query, cache])
 
   // Transform Release to AlbumTileItem
   const items: AlbumTileItem[] = results.map(r => ({

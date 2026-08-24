@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
 import { ListMusic, Plus, RefreshCw, Trash2, Send, CheckCircle } from 'lucide-react'
 import { api, Playlist } from '../api'
+import { useDataCache } from '../components/DataCache'
 
 export default function PlaylistsPage() {
-  const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const cache = useDataCache()
+  const [playlists, setPlaylists] = useState<Playlist[]>(
+    () => cache.get<Playlist[]>('playlists:list')?.data ?? []
+  )
   const [loading, setLoading]     = useState(false)
   const [creating, setCreating]   = useState(false)
   const [newName, setNewName]     = useState('')
@@ -13,16 +17,21 @@ export default function PlaylistsPage() {
 
   const load = async () => {
     setLoading(true)
-    try { const d = await api.playlists.list(); setPlaylists(d.playlists) }
-    catch {} finally { setLoading(false) }
+    try {
+      const d = await api.playlists.list()
+      setPlaylists(d.playlists)
+      cache.set('playlists:list', d.playlists)
+    } catch {} finally { setLoading(false) }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!cache.get('playlists:list')) load()
+  }, [])
 
   const create = async () => {
     if (!newName.trim()) return
     try {
       await api.playlists.create(newName.trim(), newDesc.trim() || undefined)
-      setNewName(''); setNewDesc(''); setCreating(false); load()
+      setNewName(''); setNewDesc(''); setCreating(false); cache.invalidate('playlists:list'); load()
     } catch (e: any) { alert(e.message) }
   }
 
@@ -38,7 +47,7 @@ export default function PlaylistsPage() {
 
   const del = async (id: number, name: string) => {
     if (!confirm(`Delete "${name}"?`)) return
-    try { await api.playlists.delete(id); load() } catch (e: any) { alert(e.message) }
+    try { await api.playlists.delete(id); cache.invalidate('playlists:list'); load() } catch (e: any) { alert(e.message) }
   }
 
   return (
@@ -48,9 +57,19 @@ export default function PlaylistsPage() {
           <h1 className="page-title">Playlists</h1>
           <p className="page-subtitle">Synced to Jellyfin and available in Symfonium</p>
         </div>
-        <button className="btn-primary flex items-center gap-1.5" onClick={() => setCreating(true)}>
-          <Plus size={14} /> New Playlist
-        </button>
+        <div className="flex gap-2 items-center">
+          <button
+            className="btn-ghost p-2"
+            onClick={() => { cache.invalidate('playlists:list'); load() }}
+            disabled={loading}
+            title="Refresh"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button className="btn-primary flex items-center gap-1.5" onClick={() => setCreating(true)}>
+            <Plus size={14} /> New Playlist
+          </button>
+        </div>
       </div>
 
       {/* Create form */}
