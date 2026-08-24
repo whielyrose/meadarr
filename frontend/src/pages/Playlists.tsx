@@ -13,7 +13,7 @@ interface PlaylistWithStats extends Playlist {
   album_count?:  number
 }
 
-interface PlaylistTrack {
+interface PlaylistTrackJF {
   position:          number
   artist:            string
   album:             string
@@ -22,7 +22,7 @@ interface PlaylistTrack {
 }
 
 interface PlaylistDetails extends PlaylistWithStats {
-  tracks: PlaylistTrack[]
+  tracks: PlaylistTrackJF[]
 }
 
 export default function PlaylistsPage() {
