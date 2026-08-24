@@ -27,19 +27,48 @@ class PlaylistAddTracks(BaseModel):
 
 @router.get("")
 async def list_playlists():
-    """List all playlists."""
+    """
+    List all playlists.
+    Reads track counts from Jellyfin when available (since Meadarr's local
+    playlist_tracks table may not be populated for imported playlists).
+    """
+    import asyncio
+
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT p.*, COUNT(pt.playlist_id) as track_count
+            """SELECT p.*, COUNT(pt.playlist_id) as local_track_count
                FROM playlists p
                LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
                GROUP BY p.id
                ORDER BY p.updated_at DESC"""
         ).fetchall()
-        return {"playlists": [dict(r) for r in rows]}
     finally:
         conn.close()
+
+    playlists = [dict(r) for r in rows]
+
+    # Fetch live counts from Jellyfin in parallel for playlists that have jellyfin_id
+    async def _fetch_count(pl):
+        jf_id = pl.get("jellyfin_id")
+        if not jf_id:
+            pl["track_count"] = pl.get("local_track_count", 0)
+            return
+        try:
+            items = await jellyfin.get_playlist_items(jf_id)
+            pl["track_count"] = len(items)
+            # Also compute simple stats from tracks — artists and albums
+            artists = {i.get("artist") for i in items if i.get("artist")}
+            albums = {i.get("album") for i in items if i.get("album")}
+            pl["artist_count"] = len(artists)
+            pl["album_count"] = len(albums)
+        except Exception as e:
+            log.debug("Could not fetch playlist %s from Jellyfin: %s", jf_id, e)
+            pl["track_count"] = pl.get("local_track_count", 0)
+
+    await asyncio.gather(*[_fetch_count(pl) for pl in playlists])
+
+    return {"playlists": playlists}
 
 
 @router.post("")
@@ -78,7 +107,11 @@ async def create_playlist(body: PlaylistCreate):
 
 @router.get("/{playlist_id}")
 async def get_playlist(playlist_id: int):
-    """Get a playlist with its tracks."""
+    """
+    Get a playlist with its tracks.
+    Prefers Jellyfin as the source of truth for tracks when linked,
+    since imports populate Jellyfin directly.
+    """
     conn = get_connection()
     try:
         playlist = conn.execute(
@@ -86,8 +119,9 @@ async def get_playlist(playlist_id: int):
         ).fetchone()
         if not playlist:
             raise HTTPException(404, "Playlist not found")
+        playlist = dict(playlist)
 
-        tracks = conn.execute(
+        local_tracks = conn.execute(
             """SELECT pt.*, lt.artist, lt.album, lt.title, lt.format, lt.file_path
                FROM playlist_tracks pt
                LEFT JOIN library_tracks lt ON lt.id = pt.library_track_id
@@ -95,13 +129,35 @@ async def get_playlist(playlist_id: int):
                ORDER BY pt.position""",
             (playlist_id,)
         ).fetchall()
-
-        return {
-            **dict(playlist),
-            "tracks": [dict(t) for t in tracks],
-        }
     finally:
         conn.close()
+
+    # If linked to Jellyfin, use Jellyfin as source of truth (has more accurate data)
+    tracks = []
+    jf_id = playlist.get("jellyfin_id")
+    if jf_id:
+        try:
+            jf_items = await jellyfin.get_playlist_items(jf_id)
+            for i, item in enumerate(jf_items):
+                tracks.append({
+                    "position":         i + 1,
+                    "jellyfin_item_id": item.get("jellyfin_id"),
+                    "artist":           item.get("artist") or "Unknown Artist",
+                    "album":            item.get("album") or "",
+                    "title":            item.get("title") or "",
+                })
+        except Exception as e:
+            log.error("Failed to fetch playlist %s from Jellyfin: %s", jf_id, e)
+
+    # Fall back to local DB if Jellyfin fetch failed or playlist not linked
+    if not tracks and local_tracks:
+        tracks = [dict(t) for t in local_tracks]
+
+    return {
+        **playlist,
+        "tracks":      tracks,
+        "track_count": len(tracks),
+    }
 
 
 @router.post("/{playlist_id}/tracks")
