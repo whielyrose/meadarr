@@ -21,8 +21,16 @@ interface PlaylistTrackJF {
   jellyfin_item_id?: string
 }
 
-interface PlaylistDetails extends PlaylistWithStats {
-  tracks: PlaylistTrackJF[]
+interface PlaylistDetails {
+  id:            number
+  name:          string
+  description?:  string
+  jellyfin_id?:  string
+  auto_generated?: boolean
+  track_count?:  number
+  artist_count?: number
+  album_count?:  number
+  tracks:        PlaylistTrackJF[]
 }
 
 export default function PlaylistsPage() {
